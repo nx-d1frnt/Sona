@@ -61,10 +61,10 @@ data class TrackAnalysis(
     val bpm: Float,
     val energy: Float,               // Normalized perceptual intensity (0.0f .. 1.0f)
     val cueInMs: Long,               // Smart phrase/beat-aligned entry point (skips intros/skits up to 24s)
-    val mixOutMs: Long,              // Optimal point in the outro (70%..88%) to start crossfading
+    val mixOutMs: Long,              // Optimal point in the outro (71%..89%) to start crossfading
     val crossfadeDurationMs: Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
     val durationMs: Long,
-    val midMixOutMs: Long = (durationMs * 0.52f).toLong(), // Optimal breakdown point near middle (44%..64%)
+    val midMixOutMs: Long = (durationMs * 0.56f).toLong(), // Optimal post-chorus breakdown past the midpoint (50%..67%)
     val deepCueInMs: Long = cueInMs  // Deeper hook/drop entry point (up to 32s) for Mid-Track DJ & high-energy mixes
 ) {
     /**
@@ -92,12 +92,12 @@ data class TrackAnalysis(
      * Normalized fraction along the track where the Automix Zone begins for the given [AutomixMode].
      */
     fun effectiveZoneFraction(mode: AutomixMode): Float {
-        if (durationMs <= 0L) return if (mode == AutomixMode.QUICK_MID_MIX) 0.52f else 0.82f
+        if (durationMs <= 0L) return if (mode == AutomixMode.QUICK_MID_MIX) 0.56f else 0.82f
         val targetMs = effectiveMixOutMs(mode)
         return if (mode == AutomixMode.QUICK_MID_MIX) {
-            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.42f, 0.66f)
+            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.50f, 0.68f)
         } else {
-            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.62f, 0.94f)
+            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.68f, 0.92f)
         }
     }
 

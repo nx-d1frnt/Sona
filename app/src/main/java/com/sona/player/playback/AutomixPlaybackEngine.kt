@@ -724,12 +724,13 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val nextIndex = state.currentIndex + 1
         val nextSong = playlist.getOrNull(nextIndex) ?: return
 
-        val curAnalysis = automix.currentAnalysis
+        val curAnalysis = automix.currentAnalysis?.takeIf { it.songId == state.currentSong?.id }
+            ?: state.currentSong?.let { analysisEngine.getCached(it.id) }
         val mixOutMs = curAnalysis?.effectiveMixOutMs(automix.mode)
             ?: if (automix.mode == AutomixMode.QUICK_MID_MIX) {
-                (durationMs * 0.50f).toLong().coerceAtLeast(15_000L)
+                (durationMs * 0.56f).toLong().coerceAtLeast(15_000L)
             } else {
-                (durationMs - 14000L).coerceAtLeast((durationMs * 0.70f).toLong())
+                (durationMs - 14000L).coerceAtLeast((durationMs * 0.72f).toLong())
             }
 
         if (durationMs < 20_000L) return // Skip Automix for very short audio clips

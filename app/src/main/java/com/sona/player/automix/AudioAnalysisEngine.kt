@@ -30,7 +30,7 @@ import kotlin.math.sqrt
 class AudioAnalysisEngine(private val context: Context) {
 
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
-    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v4.json")
+    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v5.json")
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
 
     init {
@@ -47,7 +47,7 @@ class AudioAnalysisEngine(private val context: Context) {
         val analysis = codecSemaphore.withPermit {
             memoryCache[song.id]?.let { return@withPermit it }
             withContext(Dispatchers.Default) {
-                withTimeoutOrNull(4000L) {
+                withTimeoutOrNull(8000L) {
                     decodeAndAnalyze(song)
                 } ?: createFallbackAnalysis(song)
             }
@@ -61,31 +61,35 @@ class AudioAnalysisEngine(private val context: Context) {
     private fun decodeAndAnalyze(song: Song): TrackAnalysis {
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
-        // 1. Sample 3 windows: Intro (first 26s for deep beat/drop cue-in search), Core (15s in middle), Outro (last 24s)
-        val introWindowMs = min(26_000L, (durationMs * 38L) / 100L)
+        // 1. Sample 3 structural windows:
+        // - Intro: first 24s (up to 35% of track) at 40 Hz (25ms frames) for smart Beat-Drop Cue-In
+        // - Core/Mid: 48% .. 70% of track at 40 Hz (25ms frames) for BPM & Mid-Track Post-Chorus Breakdown
+        // - Outro: last 28% of track (18s..38s) at 25 Hz (40ms frames) for Outro Phrase Mix-Out
+        val introWindowMs = min(24_000L, (durationMs * 35L) / 100L)
         val introFrames = extractEnergyEnvelope(
             song = song,
             startMs = 0L,
             windowDurationMs = introWindowMs,
-            frameDurationMs = 25 // 40 Hz high-res envelope to detect drum transients & beat drops in the intro
+            frameDurationMs = 25
         )
 
-        val coreStartMs = (durationMs * 0.40f).toLong()
-        val coreWindowMs = min(15_000L, durationMs / 3)
+        val coreStartMs = (durationMs * 0.48f).toLong()
+        val coreWindowMs = (durationMs * 0.22f).toLong().coerceIn(14_000L, 42_000L)
         val coreFrames = extractEnergyEnvelope(
             song = song,
             startMs = coreStartMs,
             windowDurationMs = coreWindowMs,
-            frameDurationMs = 20 // 50 Hz high-res envelope for BPM onset autocorrelation & mid-track breakdown search
+            frameDurationMs = 25
         )
 
-        val outroWindowMs = min(24_000L, durationMs / 3)
+        val outroWindowMs = (durationMs * 0.28f).toLong().coerceIn(18_000L, 38_000L)
+            .coerceAtMost(durationMs / 2)
         val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
         val outroFrames = extractEnergyEnvelope(
             song = song,
             startMs = outroStartMs,
             windowDurationMs = outroWindowMs,
-            frameDurationMs = 50 // 20 Hz envelope for outro phrase & fade-out detection
+            frameDurationMs = 40
         )
 
         if (coreFrames.isEmpty()) {
@@ -99,8 +103,13 @@ class AudioAnalysisEngine(private val context: Context) {
         val dbValue = 20f * (ln(avgRms.coerceAtLeast(0.0005f)) / ln(10f))
         val normalizedEnergy = ((dbValue + 38f) / 32f).coerceIn(0.12f, 0.98f)
 
-        // 3. Compute BPM via onset flux autocorrelation on 50 Hz core envelope
-        val estimatedBpm = estimateBpmFromEnvelope(coreFrames, envelopeHz = 50f, songId = song.id)
+        // 3. Compute BPM via onset flux autocorrelation on 40 Hz core envelope (with half-time octave folding)
+        val estimatedBpm = estimateBpmFromEnvelope(
+            envelope = coreFrames,
+            envelopeHz = 40f,
+            normalizedEnergy = normalizedEnergy,
+            songId = song.id
+        )
 
         // 4. Recommended DJ Transition Duration based on BPM (8 bars / 16 beats of musical overlap)
         val recommendedMixDurationMs = when {
@@ -121,28 +130,23 @@ class AudioAnalysisEngine(private val context: Context) {
             durationMs = durationMs
         )
 
-        // 6. Compute Musical Outro Phrase Mix-Out point (starts 12..20s before EOF where outro phrase begins)
-        val mixOutMs = if (outroFrames.size > 20) {
-            // Find where the track drops below 52% of its core energy (outro breakdown) or before trailing silence
-            val phraseThreshold = max(0.025f, avgRms * 0.52f)
-            var lastEnergeticFrame = outroFrames.size - 1
-            while (lastEnergeticFrame > 0 && outroFrames[lastEnergeticFrame] < phraseThreshold) {
-                lastEnergeticFrame--
-            }
-            val phraseEndMs = outroStartMs + (lastEnergeticFrame * 50L)
-            // Start the mix so the Bass Swap (50% of mix) hits right around phraseEndMs - 2.5s
-            val calculatedMixOut = phraseEndMs - recommendedMixDurationMs - 2000L
-            val minMixOut = (durationMs * 0.62f).toLong()
-            val maxMixOut = (durationMs - recommendedMixDurationMs - 2500L).coerceAtLeast(minMixOut)
-            calculatedMixOut.coerceIn(minMixOut, maxMixOut)
-        } else {
-            (durationMs - recommendedMixDurationMs - 3000L).coerceAtLeast((durationMs * 0.70f).toLong())
-        }
+        // 6. Compute Structural Outro Phrase Mix-Out point (70%..90% of track, adapting per song)
+        val mixOutMs = findOutroTransitionPoint(
+            outroFrames = outroFrames,
+            outroStartMs = outroStartMs,
+            frameDurationMs = 40L,
+            avgCoreRms = avgRms,
+            estimatedBpm = estimatedBpm,
+            recommendedMixDurationMs = recommendedMixDurationMs,
+            durationMs = durationMs
+        )
 
-        // 7. Compute Mid-Track Breakdown / Post-Chorus Mix-Out point (for QUICK_MID_MIX / DJ Set mode, 44%..62% of track)
+        // 7. Compute Mid-Track Breakdown / Post-Chorus Mix-Out point (strictly >= 50% of track: 50%..67%)
         val midMixOutMs = findMidTrackTransitionPoint(
             coreFrames = coreFrames,
             coreStartMs = coreStartMs,
+            frameDurationMs = 25L,
+            estimatedBpm = estimatedBpm,
             durationMs = durationMs,
             mixOutMs = mixOutMs
         )
@@ -283,59 +287,190 @@ class AudioAnalysisEngine(private val context: Context) {
     }
 
     /**
-     * Searches the middle region of the track (40%..62%) for the natural post-chorus energy dip/breakdown
-     * right after an energetic peak so Mid-Track DJ Mode transitions on a musical phrase boundary.
+     * Analyzes the last 28% of the track (18..38s) in 400ms phrase blocks to find the exact structural
+     * outro boundary (where the final chorus drops into the outro beat/fade or before trailing silence),
+     * so Classic Outro Mix adapts dynamically to each track (70%..90% of duration).
+     */
+    private fun findOutroTransitionPoint(
+        outroFrames: FloatArray,
+        outroStartMs: Long,
+        frameDurationMs: Long,
+        avgCoreRms: Float,
+        estimatedBpm: Float,
+        recommendedMixDurationMs: Long,
+        durationMs: Long
+    ): Long {
+        val minMixOut = (durationMs * 0.70f).toLong()
+        val maxMixOut = (durationMs - recommendedMixDurationMs - 2000L).coerceAtLeast(minMixOut)
+        if (outroFrames.size < 25 || maxMixOut <= minMixOut) {
+            return maxMixOut
+        }
+
+        val framesPerBlock = (400L / frameDurationMs).toInt().coerceAtLeast(4)
+        val numBlocks = outroFrames.size / framesPerBlock
+        if (numBlocks < 8) return maxMixOut
+
+        val blockRms = FloatArray(numBlocks)
+        val blockGroove = FloatArray(numBlocks)
+        for (b in 0 until numBlocks) {
+            var rmsSum = 0f
+            var fluxSum = 0f
+            val offset = b * framesPerBlock
+            for (k in 0 until framesPerBlock) {
+                val cur = outroFrames[offset + k]
+                val prev = if (offset + k > 0) outroFrames[offset + k - 1] else cur
+                rmsSum += cur
+                if (cur > prev) fluxSum += (cur - prev)
+            }
+            blockRms[b] = rmsSum / framesPerBlock
+            blockGroove[b] = blockRms[b] * 0.65f + (fluxSum / framesPerBlock) * 1.8f
+        }
+
+        // 1. Find where audible groove ends (before final fade-out / trailing silence)
+        val silenceFloor = max(0.022f, avgCoreRms * 0.45f)
+        var lastAudibleBlock = numBlocks - 1
+        while (lastAudibleBlock > 4 && blockRms[lastAudibleBlock] < silenceFloor) {
+            lastAudibleBlock--
+        }
+        val audibleEndMs = outroStartMs + (lastAudibleBlock * 400L)
+
+        // 2. Search for the strongest Final-Chorus -> Outro phrase step-down (across 3.2s windows = 8 blocks)
+        var bestStepDownBlock = -1
+        var bestStepDownScore = 0f
+        val windowBlocks = 7 // 2.8s before vs 2.8s after
+
+        for (b in windowBlocks until (lastAudibleBlock - 3).coerceAtLeast(windowBlocks)) {
+            val blockTimeMs = outroStartMs + (b * 400L)
+            if (blockTimeMs < minMixOut || blockTimeMs > maxMixOut + 4000L) continue
+
+            var beforeSum = 0f
+            var afterSum = 0f
+            for (k in 1..windowBlocks) {
+                beforeSum += blockGroove[b - k]
+                if (b + k - 1 < numBlocks) afterSum += blockGroove[b + k - 1]
+            }
+            val beforeAvg = beforeSum / windowBlocks
+            val afterAvg = afterSum / windowBlocks
+
+            if (beforeAvg >= avgCoreRms * 0.55f && afterAvg < beforeAvg * 0.86f) {
+                val dropScore = (beforeAvg - afterAvg) / beforeAvg.coerceAtLeast(0.02f)
+                if (dropScore > bestStepDownScore) {
+                    bestStepDownScore = dropScore
+                    bestStepDownBlock = b
+                }
+            }
+        }
+
+        val barMs = ((60_000f / estimatedBpm.coerceIn(75f, 170f)) * 4f).toLong().coerceIn(1400L, 3000L)
+        val candidateMs = if (bestStepDownBlock >= 0 && bestStepDownScore >= 0.14f) {
+            // Start the mix ~1 bar before the outro step-down so the Bass Swap lands right in the outro groove
+            val stepDownMs = outroStartMs + (bestStepDownBlock * 400L)
+            min(stepDownMs - barMs, audibleEndMs - recommendedMixDurationMs)
+        } else {
+            audibleEndMs - recommendedMixDurationMs - 1500L
+        }
+
+        return candidateMs.coerceIn(minMixOut, maxMixOut)
+    }
+
+    /**
+     * Searches the middle-to-upper region of the track (50%..67%) for the natural post-chorus
+     * energy step-down or breakdown phrase boundary so Mid-Track DJ Mode always transitions
+     * past the halfway mark (>= 50%) and adapts uniquely to every track's structure.
      */
     private fun findMidTrackTransitionPoint(
         coreFrames: FloatArray,
         coreStartMs: Long,
+        frameDurationMs: Long,
+        estimatedBpm: Float,
         durationMs: Long,
         mixOutMs: Long
     ): Long {
-        val minMidMs = (durationMs * 0.44f).toLong().coerceAtLeast(22_000L)
-        val maxMidMs = (durationMs * 0.62f).toLong().coerceAtMost((mixOutMs - 8000L).coerceAtLeast(minMidMs))
-        if (coreFrames.size < 100 || maxMidMs <= minMidMs) {
-            return ((minMidMs + maxMidMs) / 2L).coerceIn(15_000L, mixOutMs)
+        val minMidMs = (durationMs * 0.50f).toLong().coerceAtLeast(20_000L)
+        val maxMidMs = (durationMs * 0.67f).toLong()
+            .coerceAtMost((mixOutMs - 7000L).coerceAtLeast(minMidMs))
+
+        if (coreFrames.size < 80 || maxMidMs <= minMidMs) {
+            return ((minMidMs + maxMidMs) / 2L).coerceIn(minMidMs, maxMidMs.coerceAtLeast(minMidMs))
         }
 
-        // Group 20ms frames into 500ms blocks (25 frames per block)
-        val blockSize = 25
+        // Group 25ms frames into 500ms musical phrase blocks (20 frames per block)
+        val blockSize = (500L / frameDurationMs).toInt().coerceAtLeast(4)
         val numBlocks = coreFrames.size / blockSize
-        if (numBlocks < 4) return ((minMidMs + maxMidMs) / 2L)
+        if (numBlocks < 8) return ((minMidMs + maxMidMs) / 2L)
 
-        val blockEnergy = FloatArray(numBlocks)
+        val blockRms = FloatArray(numBlocks)
+        val blockGroove = FloatArray(numBlocks)
         for (b in 0 until numBlocks) {
-            var sum = 0f
+            var rmsSum = 0f
+            var fluxSum = 0f
             val offset = b * blockSize
             for (k in 0 until blockSize) {
-                sum += coreFrames[offset + k]
+                val cur = coreFrames[offset + k]
+                val prev = if (offset + k > 0) coreFrames[offset + k - 1] else cur
+                rmsSum += cur
+                if (cur > prev) fluxSum += (cur - prev)
             }
-            blockEnergy[b] = sum / blockSize
+            blockRms[b] = rmsSum / blockSize
+            // Combine sustained RMS energy + percussive transient flux
+            blockGroove[b] = blockRms[b] * 0.60f + (fluxSum / blockSize) * 2.0f
         }
 
-        // 1. Find the strongest chorus peak in the first 60% of the middle window
-        val peakSearchEnd = (numBlocks * 0.60f).toInt().coerceAtLeast(1)
-        var peakBlock = 0
-        var peakVal = -1f
-        for (b in 0 until peakSearchEnd) {
-            if (blockEnergy[b] > peakVal) {
-                peakVal = blockEnergy[b]
-                peakBlock = b
+        val maxGroove = (blockGroove.maxOrNull() ?: 0.1f).coerceAtLeast(0.01f)
+        val barMs = ((60_000f / estimatedBpm.coerceIn(75f, 170f)) * 4f).toLong().coerceIn(1400L, 3000L)
+
+        // Evaluate every phrase boundary block inside [minMidMs .. maxMidMs] for:
+        // 1) Strongest post-chorus step-down (3.5s chorus window before b -> 3.0s bridge/breakdown window after b)
+        // 2) Local breakdown valley contrast (dip after a high-energy peak)
+        var bestBoundaryBlock = -1
+        var bestBoundaryScore = -Float.MAX_VALUE
+        val lookback = 7  // 3.5s before
+        val lookahead = 6 // 3.0s after
+
+        for (b in 3 until (numBlocks - 2)) {
+            val blockTimeMs = coreStartMs + (b * 500L)
+            if (blockTimeMs < minMidMs || blockTimeMs > maxMidMs + barMs) continue
+
+            var beforeSum = 0f
+            var beforeCount = 0
+            for (k in 1..lookback) {
+                if (b - k >= 0) {
+                    beforeSum += blockGroove[b - k]
+                    beforeCount++
+                }
+            }
+            var afterSum = 0f
+            var afterCount = 0
+            for (k in 0 until lookahead) {
+                if (b + k < numBlocks) {
+                    afterSum += blockGroove[b + k]
+                    afterCount++
+                }
+            }
+
+            val beforeAvg = if (beforeCount > 0) beforeSum / beforeCount else blockGroove[b]
+            val afterAvg = if (afterCount > 0) afterSum / afterCount else blockGroove[b]
+
+            // Step-down contrast: positive when a high-energy chorus drops into a bridge/verse/breakdown
+            val stepDownContrast = (beforeAvg - afterAvg) / maxGroove
+            // Valley depth right at [b, b+1] relative to the preceding section
+            val localDip = (beforeAvg - ((blockGroove[b] + blockGroove[(b + 1).coerceAtMost(numBlocks - 1)]) * 0.5f)) / maxGroove
+            // Bonus if the preceding section was genuinely an energetic chorus (>= 65% of maxGroove)
+            val chorusBonus = if (beforeAvg >= maxGroove * 0.65f) 0.18f else 0f
+
+            val totalScore = stepDownContrast * 1.4f + localDip * 0.9f + chorusBonus
+            if (totalScore > bestBoundaryScore) {
+                bestBoundaryScore = totalScore
+                bestBoundaryBlock = b
             }
         }
 
-        // 2. Find the subsequent breakdown / energy valley after the chorus peak
-        var bestValleyBlock = (peakBlock + 2).coerceAtMost(numBlocks - 1)
-        var minValleyVal = Float.MAX_VALUE
-        for (b in bestValleyBlock until numBlocks) {
-            if (blockEnergy[b] < minValleyVal) {
-                minValleyVal = blockEnergy[b]
-                bestValleyBlock = b
-            }
+        if (bestBoundaryBlock < 0) {
+            return ((minMidMs + maxMidMs) / 2L)
         }
 
-        // Start the mix ~2.5s before the valley floor so the incoming track layers into the breakdown
-        val candidateMs = coreStartMs + (bestValleyBlock * 500L) - 2500L
+        // Start the transition ~1 bar before the post-chorus boundary so the incoming track layers seamlessly
+        val candidateMs = coreStartMs + (bestBoundaryBlock * 500L) - barMs
         return candidateMs.coerceIn(minMidMs, maxMidMs)
     }
 
@@ -383,7 +518,7 @@ class AudioAnalysisEngine(private val context: Context) {
             codec.start()
 
             val samplesPerFrame = ((sampleRate * frameDurationMs) / 1000) * channels
-            val maxFrames = ((windowDurationMs / frameDurationMs) + 4).toInt().coerceAtMost(800)
+            val maxFrames = ((windowDurationMs / frameDurationMs) + 8).toInt().coerceAtMost(1500)
             val rmsFrames = FloatArray(maxFrames)
             var frameIndex = 0
 
@@ -427,8 +562,8 @@ class AudioAnalysisEngine(private val context: Context) {
                         outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
                         val shortBuffer = outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
 
-                        // Downsample by step 4 for ultra-low CPU usage while preserving RMS envelope
-                        val step = 4
+                        // Downsample by step 6 for ultra-fast decoding while preserving accurate RMS envelope
+                        val step = 6
                         var idx = 0
                         val limit = shortBuffer.remaining()
                         while (idx < limit && frameIndex < maxFrames) {
@@ -468,11 +603,13 @@ class AudioAnalysisEngine(private val context: Context) {
     }
 
     /**
-     * Estimates BPM in range [72 .. 172] using onset-strength envelope autocorrelation.
+     * Estimates BPM in range [76 .. 172] using onset-strength envelope autocorrelation
+     * with automatic half-time -> double-time octave folding for energetic pop/electronic tracks.
      */
     private fun estimateBpmFromEnvelope(
         envelope: FloatArray,
         envelopeHz: Float,
+        normalizedEnergy: Float,
         songId: Long
     ): Float {
         if (envelope.size < 60) return fallbackBpmForId(songId)
@@ -494,7 +631,9 @@ class AudioAnalysisEngine(private val context: Context) {
         // lag = (60 / BPM) * envelopeHz
         val minLag = ((60f / 172f) * envelopeHz).roundToInt().coerceAtLeast(1)
         val maxLag = ((60f / 72f) * envelopeHz).roundToInt().coerceAtMost(onset.size / 2)
+        if (maxLag <= minLag) return fallbackBpmForId(songId)
 
+        val corrByLag = FloatArray(maxLag + 1)
         var bestLag = -1
         var bestCorr = -1f
 
@@ -504,10 +643,11 @@ class AudioAnalysisEngine(private val context: Context) {
             for (i in 0 until count) {
                 sum += onset[i] * onset[i + lag]
             }
-            // Perceptual tempo prior: slight preference toward common musical groove (95..135 BPM)
+            // Perceptual tempo prior: slight preference toward club/pop/electronic range (92..152 BPM)
             val candidateBpm = (60f * envelopeHz) / lag
-            val priorWeight = if (candidateBpm in 94f..138f) 1.12f else 1.0f
+            val priorWeight = if (candidateBpm in 92f..152f) 1.14f else 1.0f
             val corr = (sum / count) * priorWeight
+            corrByLag[lag] = corr
 
             if (corr > bestCorr) {
                 bestCorr = corr
@@ -519,17 +659,30 @@ class AudioAnalysisEngine(private val context: Context) {
             return fallbackBpmForId(songId)
         }
 
-        val rawBpm = (60f * envelopeHz) / bestLag
-        return ((rawBpm * 10f).roundToInt() / 10f).coerceIn(72f, 172f)
+        var rawBpm = (60f * envelopeHz) / bestLag
+        // Octave folding: if autocorrelation locked onto a 2-bar half-time subharmonic (e.g. 73 BPM instead of 146 BPM),
+        // check the double-time lag (bestLag / 2) and fold up when double-time harmonic is strong or track energy is high!
+        if (rawBpm < 88f) {
+            val halfLag = (bestLag / 2).coerceIn(minLag, maxLag)
+            val doubleTimeCorr = corrByLag[halfLag]
+            if (doubleTimeCorr >= bestCorr * 0.58f || normalizedEnergy >= 0.48f) {
+                rawBpm *= 2f
+            }
+        }
+
+        return ((rawBpm * 10f).roundToInt() / 10f).coerceIn(76f, 172f)
     }
 
     private fun createFallbackAnalysis(song: Song): TrackAnalysis {
         val duration = song.durationMs.coerceAtLeast(15_000L)
         val bpm = fallbackBpmForId(song.id)
+        val hashOffset = (abs(song.id.hashCode()) % 15) // 0..14% deterministic per-song spread if fallback is ever used
         val energy = 0.55f + ((abs(song.id.hashCode()) % 35) / 100f)
         val mixDuration = 10500L
-        val mixOut = (duration - mixDuration - 3500L).coerceAtLeast((duration * 0.68f).toLong())
-        val midMixOut = (duration * 0.50f).toLong().coerceAtMost(mixOut)
+        val mixOut = (duration - mixDuration - 3500L - (hashOffset * 400L))
+            .coerceIn((duration * 0.72f).toLong(), (duration * 0.89f).toLong())
+        val midFraction = 0.52f + (hashOffset / 100f) // 52% .. 66%
+        val midMixOut = (duration * midFraction).toLong().coerceAtMost(mixOut - 6000L)
         return TrackAnalysis(
             songId = song.id,
             bpm = bpm,
@@ -554,14 +707,16 @@ class AudioAnalysisEngine(private val context: Context) {
             val array = JSONArray(jsonStr)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
-                val dur = obj.getLong("durationMs")
+                val dur = obj.getLong("durationMs").coerceAtLeast(15_000L)
+                val rawMid = obj.optLong("midMixOutMs", (dur * 0.56f).toLong())
+                val safeMid = rawMid.coerceIn((dur * 0.50f).toLong(), (dur * 0.67f).toLong())
                 val item = TrackAnalysis(
                     songId = obj.getLong("songId"),
                     bpm = obj.getDouble("bpm").toFloat(),
                     energy = obj.getDouble("energy").toFloat(),
                     cueInMs = obj.getLong("cueInMs"),
                     mixOutMs = obj.getLong("mixOutMs"),
-                    midMixOutMs = obj.optLong("midMixOutMs", (dur * 0.50f).toLong()),
+                    midMixOutMs = safeMid,
                     deepCueInMs = obj.optLong("deepCueInMs", obj.getLong("cueInMs")),
                     crossfadeDurationMs = obj.getLong("crossfadeDurationMs"),
                     durationMs = dur

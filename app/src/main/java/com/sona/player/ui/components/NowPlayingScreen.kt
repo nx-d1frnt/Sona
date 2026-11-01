@@ -129,12 +129,24 @@ fun NowPlayingScreen(
         0f
     }
 
-    val automixZoneFraction = if (automixState.isEnabled) {
-        automixState.currentAnalysis?.effectiveZoneFraction(automixState.mode)
-            ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) 0.50f else 0.85f
+    val activeTrackAnalysis = remember(song.id, automixState.currentAnalysis, automixState.analyzedTracks) {
+        automixState.currentAnalysis?.takeIf { it.songId == song.id }
+            ?: automixState.analyzedTracks[song.id]
+    }
+    val targetZoneFraction = if (automixState.isEnabled) {
+        activeTrackAnalysis?.effectiveZoneFraction(automixState.mode)
+            ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) 0.56f else 0.82f
     } else {
         1.0f
     }
+    val automixZoneFraction by animateFloatAsState(
+        targetValue = targetZoneFraction,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioNoBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "AutomixZoneFraction"
+    )
 
     BackHandler(onBack = {
         if (isQueueSheetOpen) {
@@ -493,23 +505,28 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.65f)
                     )
 
-                    // Ненавязчивый индикатор текущего BPM и режима Automix (OUTRO / MID DJ) между таймкодами
-                    val curBpm = automixState.currentAnalysis?.bpm?.roundToInt()
+                    // Ненавязчивый индикатор текущего BPM, режима Automix и точного таймкода точки перехода
+                    val curBpm = activeTrackAnalysis?.bpm?.roundToInt()
                     if (automixState.isEnabled && curBpm != null) {
                         val tempoTag = if (automixState.isTransitioning && automixState.activeTempoRatio != 1.0f) {
                             val pct = ((automixState.activeTempoRatio - 1.0f) * 100f).roundToInt()
                             val sign = if (pct > 0) "+" else ""
                             " ($sign$pct%)"
                         } else ""
-                        val modeTag = if (automixState.mode == AutomixMode.QUICK_MID_MIX) " • MID DJ" else ""
+                        val mixPointMs = activeTrackAnalysis.effectiveMixOutMs(automixState.mode)
+                        val mixPointTag = if (automixState.mode == AutomixMode.QUICK_MID_MIX) {
+                            " • MID @ ${formatTime(mixPointMs)}"
+                        } else {
+                            " • Mix @ ${formatTime(mixPointMs)}"
+                        }
                         Text(
-                            text = "$curBpm BPM$tempoTag$modeTag",
+                            text = "$curBpm BPM$tempoTag$mixPointTag",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
                             color = if (automixState.isTransitioning || automixState.mode == AutomixMode.QUICK_MID_MIX) {
                                 palette.secondaryAccent
                             } else {
-                                Color.White.copy(alpha = 0.50f)
+                                Color.White.copy(alpha = 0.55f)
                             }
                         )
                     } else {
