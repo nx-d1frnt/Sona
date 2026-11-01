@@ -41,6 +41,25 @@ internal object MusicalCueSelector {
             minOf(baseMs + 5000L, 24_000L, track.durationMs - overlapMs - 1000L), overlapMs, outgoing = false)
     }
 
+    /** DJ entries may use the measured core, rather than being confined to the intro. */
+    fun djIncoming(track: TrackAnalysis, base: Long, overlap: Long,
+                   preferCore: Boolean, outgoingVoice: Float): Long {
+        val upper = minOf((track.durationMs * 0.60).toLong(), track.durationMs - overlap - 1000L)
+        if (upper <= 0L) return base
+        val target = if (preferCore) (track.durationMs * 0.48).toLong() else base
+        val beats = track.beatSections.filter { it.confidence >= 0.45f }
+            .flatMap { section -> section.beatsMs.filter { it in section.startMs..section.endMs } }.toSet()
+        val measured = track.vocalSections.flatMap { section ->
+            (section.startMs..section.endMs step 1000L).toList()
+        }
+        val candidates = (measured + beats + base + track.deepCueInMs).distinct().filter { it in 0L..upper }
+        return candidates.minByOrNull { cue ->
+            val risk = vocalRisk(track, cue, cue + 3000L) ?: 1f
+            val distance = abs(cue - target).toFloat() / track.durationMs.coerceAtLeast(1L)
+            risk * outgoingVoice * 0.5f + distance * 1.2f - if (cue in beats) 0.06f else 0f
+        } ?: base
+    }
+
     private fun choose(track: TrackAnalysis, baseMs: Long, lower: Long, upper: Long,
                        overlapMs: Long, outgoing: Boolean): Long {
         if (upper < lower || track.vocalSections.isEmpty() && track.beatSections.isEmpty()) return baseMs

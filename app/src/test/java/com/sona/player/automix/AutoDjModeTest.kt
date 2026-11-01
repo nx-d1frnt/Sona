@@ -32,24 +32,25 @@ class AutoDjModeTest {
         }
     }
 
-    @Test fun longEnergeticSongsNeedMeasuredStructure() {
-        assertOutro(current.copy(midMixConfidence = 0f))
-        assertOutro(current.copy(midMixConfidence = 0.59f))
-        assertOutro(current.copy(midMixConfidence = Float.NaN))
+    @Test fun emptyFallbackAnalysisKeepsOutro() {
+        assertOutro(current.copy(midMixConfidence = 0f, vocalSections = emptyList()))
+        assertOutro(current.copy(midMixConfidence = Float.NaN, vocalSections = emptyList()))
     }
 
-    @Test fun vocalsOrUnknownVocalCoveragePreventAutomaticEarlyExit() {
-        assertOutro(current.copy(vocalSections = emptyList()))
-        assertOutro(current.copy(vocalSections = listOf(VocalSection(150_000L, 220_000L, 0.9f))))
+    @Test fun continuousVocalsDoNotVetoMeasuredMiddleSection() {
+        val track = current.copy(vocalSections = listOf(VocalSection(150_000L, 220_000L, 0.9f)))
+        assertEquals(AutomixMode.QUICK_MID_MIX, track.resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
+        assertEquals(AutomixTransitionTool.ECHO_OUT, TransitionPlanner.plan(track, next, AutomixMode.AUTO_DJ).tool)
     }
 
     @Test fun incompletePairAnalysisKeepsOutro() = assertOutro(current, null)
 
     @Test fun earlyPointMustLeaveEnoughMusicAndTimeBeforeOutro() {
-        assertOutro(current.copy(midMixOutMs = 149_999L))
-        assertOutro(current.copy(midMixOutMs = 155_000L))
-        assertOutro(current.copy(midMixOutMs = 220_000L))
-        assertOutro(current.copy(mixOutMs = 204_000L))
+        assertOutro(current.copy(mixOutMs = 180_000L))
+        val track = current.copy(midMixOutMs = 149_999L)
+        val cue = track.effectiveMixOutMs(AutomixMode.AUTO_DJ, next)
+        assertTrue(cue in 156_000L..210_000L)
+        assertTrue(track.mixOutMs - cue >= 25_000L)
     }
 
     @Test fun incompatiblePairKeepsOutro() {
@@ -70,7 +71,7 @@ class AutoDjModeTest {
             vocalSections = listOf(VocalSection(112_000L, 116_000L, 0.9f),
                 VocalSection(116_000L, 120_000L, 0.05f)))
         assertEquals(AutomixMode.QUICK_MID_MIX, track.resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
-        assertEquals(116_000L, track.effectiveMixOutMs(AutomixMode.AUTO_DJ, next))
+        assertTrue(track.effectiveMixOutMs(AutomixMode.AUTO_DJ, next) in 116_000L..117_000L)
     }
 
     private fun steadyGroove() = current.copy(durationMs = 180_000L,
@@ -93,12 +94,12 @@ class AutoDjModeTest {
         assertTrue(TransitionPlanner.plan(track, incoming, AutomixMode.AUTO_DJ).mixOutMs in 94_000L..126_000L)
     }
 
-    @Test fun rhythmFallbackNeedsBothMeasuredBeatsAndVocalPause() {
+    @Test fun localEvidenceCanEnableMiddleWithoutPerfectVocalPause() {
         val track = steadyGroove()
-        assertOutro(track.copy(beatSections = emptyList()))
-        assertOutro(track.copy(beatSections = track.beatSections.map { it.copy(confidence = 0.2f) }))
-        assertOutro(track.copy(vocalSections = emptyList()))
-        assertOutro(track.copy(vocalSections = listOf(VocalSection(94_000L, 130_000L, 0.9f))))
+        assertEquals(AutomixMode.QUICK_MID_MIX, track.copy(beatSections = emptyList()).resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
+        assertOutro(track.copy(beatSections = emptyList(), vocalSections = emptyList()))
+        assertEquals(AutomixMode.QUICK_MID_MIX, track.copy(vocalSections = emptyList()).resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
+        assertEquals(AutomixMode.QUICK_MID_MIX, track.copy(vocalSections = listOf(VocalSection(94_000L, 130_000L, 0.9f))).resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
     }
 
     @Test fun twoAndHalfMinuteTrackCanUseMiddleAndLeavesOutroSpace() {
@@ -119,13 +120,13 @@ class AutoDjModeTest {
     }
 
     @Test fun autoOutroDoesNotSkipDeepIntoIncomingIntroJustBecauseOutgoingIsLoud() {
-        val outgoing = current.copy(midMixConfidence = 0f)
+        val outgoing = current.copy(midMixConfidence = 0f, vocalSections = emptyList())
         assertEquals(next.cueInMs, next.effectiveCueInMs(AutomixMode.AUTO_DJ, outgoing.energy, outgoing))
         assertEquals(next.deepCueInMs, next.effectiveCueInMs(AutomixMode.QUICK_MID_MIX, outgoing.energy, outgoing))
     }
 
     @Test fun queueTransitionMetadataUsesTheSameModeAsPlayback() {
-        val outgoing = current.copy(midMixConfidence = 0f)
+        val outgoing = current.copy(midMixConfidence = 0f, vocalSections = emptyList())
         val saved = AutomixQueueSelector.buildSavedTransition(
             outgoing.songId, next.songId, outgoing, next, AutomixMode.AUTO_DJ
         )

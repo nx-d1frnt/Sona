@@ -92,6 +92,20 @@ class TransitionPlannerTest {
         assertSame(first, TransitionPlanner.plan(outgoing, instrumental, AutomixMode.AUTO_DJ))
     }
 
+    @Test fun autoMiddleMixCanEnterMeasuredCoreInsteadOfIntro() {
+        val outgoing = from().copy(midMixConfidence = 0f,
+            vocalSections = listOf(VocalSection(156_000, 210_000, 0.8f)))
+        val incoming = to().copy(deepCueInMs = 8000L,
+            beatSections = to().beatSections + beats(144_000, 180_000, 120f),
+            vocalSections = to().vocalSections + VocalSection(144_000, 180_000, 0.05f))
+        val plan = TransitionPlanner.plan(outgoing, incoming, AutomixMode.AUTO_DJ)
+        assertTrue(plan.mixOutMs in 156_000L..210_000L)
+        assertTrue(plan.cueInMs in 144_000L..180_000L)
+        assertEquals(AutomixTransitionTool.ECHO_OUT, plan.tool)
+        assertEquals(plan.cueInMs, AutomixQueueSelector.buildSavedTransition(1, 2,
+            outgoing, incoming, AutomixMode.AUTO_DJ).cueInMs)
+    }
+
     @Test fun queueMetadataAndPlaybackUseTheSameToolCueAndDuration() {
         val outgoing = from()
         val incoming = to(160f)

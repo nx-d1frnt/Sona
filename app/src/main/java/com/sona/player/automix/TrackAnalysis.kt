@@ -131,23 +131,22 @@ data class TrackAnalysis(
         val upper = minOf((durationMs * 0.70).toLong(), mixOutMs - 25_000L,
             durationMs - 15_000L)
         if (upper < lower) return null
-        fun vocalPause(cue: Long): Boolean =
-            (MusicalCueSelector.vocalRisk(this, cue, cue + 1000L) ?: 1f) < 0.25f &&
-                (MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) ?: 1f) < 0.35f
-
-        // Prefer the detected structural boundary when it exists.
-        if (midMixConfidence.isFinite() && midMixConfidence >= 0.60f && midMixOutMs in lower..upper) {
-            (midMixOutMs..minOf(midMixOutMs + 8000L, upper) step 500L)
-                .firstOrNull { vocalPause(it) }?.let { return it }
+        val structural = midMixConfidence.isFinite() && midMixConfidence >= 0.60f && midMixOutMs in lower..upper
+        val beats = beatSections.filter { it.confidence >= 0.45f && it.bpm.isFinite() && it.bpm > 0f && it.beatsMs.size >= 6 }
+            .flatMap { section -> section.beatsMs.filter { it in section.startMs..section.endMs } }.toSet()
+        val candidates = ((lower..upper step 500L).toList() + beats + if (structural) listOf(midMixOutMs) else emptyList())
+            .filter { it in lower..upper }
+        // Vocals rank candidates instead of vetoing the entire middle of a song.
+        // Require actual local evidence; empty/fallback profiles still use the outro.
+        val target = if (structural) midMixOutMs else (durationMs * 0.60).toLong()
+        return candidates.filter { cue ->
+            MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) != null || cue in beats ||
+                (structural && cue in midMixOutMs..midMixOutMs + 8000L)
+        }.minByOrNull { cue ->
+            val voice = MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) ?: 0.65f
+            voice * 0.45f + kotlin.math.abs(cue - target) / 20_000f * 0.20f -
+                if (cue in beats) 0.08f else 0f
         }
-
-        // A steady groove need not have a large energy drop. A measured beat in a
-        // vocal pause is enough for a DJ exit; never extrapolate unmeasured rhythm.
-        return beatSections.asSequence()
-            .filter { it.confidence >= 0.45f && it.bpm.isFinite() && it.bpm > 0f && it.beatsMs.size >= 6 }
-            .flatMap { section -> section.beatsMs.asSequence().filter { it in section.startMs..section.endMs } }
-            .filter { it in lower..upper && vocalPause(it) }
-            .minByOrNull { kotlin.math.abs(it - (durationMs * 0.60).toLong()) }
     }
 
     /**
@@ -168,6 +167,12 @@ data class TrackAnalysis(
         }
         val overlap = if (resolvedMode == AutomixMode.QUICK_MID_MIX) 8500L
             else outgoingAnalysis?.crossfadeDurationMs ?: 10_500L
+        if (mode == AutomixMode.AUTO_DJ && outgoingAnalysis != null) {
+            val position = outgoingAnalysis.autoMidCue() ?: outgoingAnalysis.mixOutMs
+            val voice = MusicalCueSelector.vocalRisk(outgoingAnalysis, position, position + 3000L)
+            return MusicalCueSelector.djIncoming(this, base, overlap,
+                preferCore = resolvedMode == AutomixMode.QUICK_MID_MIX, outgoingVoice = voice ?: 0.65f)
+        }
         return MusicalCueSelector.incoming(this, base, overlap)
     }
 

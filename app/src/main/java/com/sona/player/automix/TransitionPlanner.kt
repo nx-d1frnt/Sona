@@ -70,8 +70,11 @@ internal object TransitionPlanner {
             }
             if (voiceEnd != null) {
                 val introLeadMs = ((voiceEnd - rawOut + 750L) * ratios.second / ratios.first).toLong()
-                val instrumentalCue = (0L..minOf(baseIn + 5000L, 24_000L, to.durationMs - baseDuration) step 250L)
-                    .firstOrNull { (MusicalCueSelector.vocalRisk(to, it, it + introLeadMs) ?: 1f) < 0.20f }
+                val instrumentalCue = (to.vocalSections.flatMap { (it.startMs..it.endMs step 500L).toList() } + baseIn)
+                    .filter { it >= 0 && it <= to.durationMs - baseDuration &&
+                        it <= (to.durationMs * 0.60).toLong() &&
+                        (MusicalCueSelector.vocalRisk(to, it, it + introLeadMs) ?: 1f) < 0.20f }
+                    .minByOrNull { abs(it - baseIn) }
                 if (instrumentalCue != null && rawOut >= 0 && rawOut + baseDuration < from.durationMs) {
                     tool = AutomixTransitionTool.VOCAL_HANDOFF
                     out = rawOut
@@ -90,10 +93,11 @@ internal object TransitionPlanner {
                 duration = ((period ?: 500f) * 2).toLong().coerceIn(1000L, 2000L)
                 cue = nearestBeat(to, baseIn) ?: baseIn
                 out = if (actualOutPositionMs == null) nearestBeat(from, baseOut) ?: baseOut else baseOut
-            } else if (period != null && ((gap != null && gap > 0.06f) ||
-                    (outVoice != null && outVoice > 0.35f && inVoice != null && inVoice > 0.35f))) {
+            } else if ((period != null && gap != null && gap > 0.06f) ||
+                    (outVoice != null && outVoice > 0.35f && inVoice != null && inVoice > 0.35f) ||
+                    (resolved == AutomixMode.QUICK_MID_MIX && (outVoice ?: 1f) >= 0.35f)) {
                 tool = AutomixTransitionTool.ECHO_OUT
-                duration = (period * 6).toLong().coerceIn(2500L, 4500L)
+                duration = ((period ?: 500f) * 6).toLong().coerceIn(2500L, 4500L)
             }
         }
         // Echo Out bridges grooves at natural speed. No Sonic parameter drain may synthesize
@@ -123,11 +127,7 @@ internal object TransitionPlanner {
             val voice = MusicalCueSelector.vocalRisk(from, position, position + 3000L) ?: return Float.POSITIVE_INFINITY
             return voice * incomingVoice + abs(position - base) / 6000f * 0.12f
         }
-        val candidates = ((lower..upper step 500L).toList() + base).filter { cue ->
-            !early || mode != AutomixMode.AUTO_DJ ||
-                ((MusicalCueSelector.vocalRisk(from, cue, cue + 1000L) ?: 1f) < 0.25f &&
-                    (MusicalCueSelector.vocalRisk(from, cue, cue + 3000L) ?: 1f) < 0.35f)
-        }
+        val candidates = (lower..upper step 500L).toList() + base
         val best = candidates.minByOrNull { score(it) } ?: base
         return if (score(best) < score(base)) best else base
     }
