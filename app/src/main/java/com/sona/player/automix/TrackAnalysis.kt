@@ -62,9 +62,9 @@ data class TrackAnalysis(
     val energy: Float,               // Normalized perceptual intensity (0.0f .. 1.0f)
     val cueInMs: Long,               // Optimal start point skipping leading silence / weak intro
     val mixOutMs: Long,              // Optimal point in the outro (70%..88%) to start crossfading
-    val midMixOutMs: Long = (durationMs * 0.52f).toLong(), // Optimal breakdown point near middle (44%..64%)
     val crossfadeDurationMs: Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
-    val durationMs: Long
+    val durationMs: Long,
+    val midMixOutMs: Long = (durationMs * 0.52f).toLong() // Optimal breakdown point near middle (44%..64%)
 ) {
     /**
      * Returns the active mix-out timestamp in milliseconds for the chosen [AutomixMode].
