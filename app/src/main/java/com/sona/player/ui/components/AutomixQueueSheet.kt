@@ -141,7 +141,7 @@ fun AutomixQueueSheet(
                             color = Color.White
                         )
                         val subtitle = if (automixState.isEnabled) {
-                            "${queue.size} tracks • DJ Transitions Preserved"
+                            "${queue.size} tracks • ${automixState.mode.displayName} Active"
                         } else {
                             "${queue.size} tracks • Standard Queue"
                         }
@@ -181,7 +181,7 @@ fun AutomixQueueSheet(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (automixState.isEnabled) "Automix ON" else "Automix OFF",
+                                text = automixState.mode.displayName,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 color = Color.White

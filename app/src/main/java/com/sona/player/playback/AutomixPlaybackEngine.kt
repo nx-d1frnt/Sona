@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaSession
 import com.sona.player.automix.AudioAnalysisEngine
 import com.sona.player.automix.AutomixEqAudioProcessor
+import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixQueueSelector
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.automix.AutomixTransitionTool
@@ -486,14 +487,26 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         inactiveDeck.repeatMode = nextMode
     }
 
+    /**
+     * Cycles Automix mode: CLASSIC_OUTRO (Outro Mix) -> QUICK_MID_MIX (Mid-Track DJ Set) -> OFF -> CLASSIC_OUTRO
+     */
     fun toggleAutomix() {
         val currentAutomix = _playerState.value.automix
-        val newEnabled = !currentAutomix.isEnabled
+        val nextMode = when (currentAutomix.mode) {
+            AutomixMode.CLASSIC_OUTRO -> AutomixMode.QUICK_MID_MIX
+            AutomixMode.QUICK_MID_MIX -> AutomixMode.OFF
+            AutomixMode.OFF -> AutomixMode.CLASSIC_OUTRO
+        }
+        val newEnabled = (nextMode != AutomixMode.OFF)
         if (!newEnabled && crossfadeJob?.isActive == true) {
             cancelActiveCrossfade()
         }
+        isPrebufferedForIndex = -1
         _playerState.value = _playerState.value.copy(
-            automix = currentAutomix.copy(isEnabled = newEnabled)
+            automix = currentAutomix.copy(
+                isEnabled = newEnabled,
+                mode = nextMode
+            )
         )
         if (newEnabled) {
             val idx = _playerState.value.currentIndex
@@ -710,8 +723,12 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val nextSong = playlist.getOrNull(nextIndex) ?: return
 
         val curAnalysis = automix.currentAnalysis
-        val mixOutMs = curAnalysis?.mixOutMs
-            ?: (durationMs - 14000L).coerceAtLeast((durationMs * 0.70f).toLong())
+        val mixOutMs = curAnalysis?.effectiveMixOutMs(automix.mode)
+            ?: if (automix.mode == AutomixMode.QUICK_MID_MIX) {
+                (durationMs * 0.50f).toLong().coerceAtLeast(15_000L)
+            } else {
+                (durationMs - 14000L).coerceAtLeast((durationMs * 0.70f).toLong())
+            }
 
         if (durationMs < 20_000L) return // Skip Automix for very short audio clips
 
@@ -722,7 +739,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         // 2. Trigger the DJ Automix (High-Pass Blend -> Bass Swap -> Low-Pass Filter Sweep) when entering the Automix Zone
         if (positionMs >= mixOutMs && positionMs < durationMs - 2500L) {
-            startCrossfadeTransition(nextIndex, nextSong)
+            val customDur = if (automix.mode == AutomixMode.QUICK_MID_MIX) 8500L else null
+            startCrossfadeTransition(nextIndex, nextSong, customDurationMs = customDur)
         }
     }
 

@@ -30,7 +30,7 @@ import kotlin.math.sqrt
 class AudioAnalysisEngine(private val context: Context) {
 
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
-    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v2.json")
+    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v3.json")
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
 
     init {
@@ -69,12 +69,13 @@ class AudioAnalysisEngine(private val context: Context) {
             frameDurationMs = 50 // 20 Hz envelope for intro beat/groove detection
         )
 
-        val coreStartMs = (durationMs * 0.38f).toLong()
+        val coreStartMs = (durationMs * 0.40f).toLong()
+        val coreWindowMs = min(15_000L, durationMs / 3)
         val coreFrames = extractEnergyEnvelope(
             song = song,
             startMs = coreStartMs,
-            windowDurationMs = min(8_000L, durationMs / 2),
-            frameDurationMs = 20 // 50 Hz high-res envelope for BPM onset autocorrelation
+            windowDurationMs = coreWindowMs,
+            frameDurationMs = 20 // 50 Hz high-res envelope for BPM onset autocorrelation & mid-track breakdown search
         )
 
         val outroWindowMs = min(24_000L, durationMs / 3)
@@ -141,15 +142,81 @@ class AudioAnalysisEngine(private val context: Context) {
             (durationMs - recommendedMixDurationMs - 3000L).coerceAtLeast((durationMs * 0.70f).toLong())
         }
 
+        // 7. Compute Mid-Track Breakdown / Post-Chorus Mix-Out point (for QUICK_MID_MIX / DJ Set mode, 44%..62% of track)
+        val midMixOutMs = findMidTrackTransitionPoint(
+            coreFrames = coreFrames,
+            coreStartMs = coreStartMs,
+            durationMs = durationMs,
+            mixOutMs = mixOutMs
+        )
+
         return TrackAnalysis(
             songId = song.id,
             bpm = estimatedBpm,
             energy = normalizedEnergy,
             cueInMs = cueInMs,
             mixOutMs = mixOutMs,
+            midMixOutMs = midMixOutMs,
             crossfadeDurationMs = recommendedMixDurationMs,
             durationMs = durationMs
         )
+    }
+
+    /**
+     * Searches the middle region of the track (40%..62%) for the natural post-chorus energy dip/breakdown
+     * right after an energetic peak so Mid-Track DJ Mode transitions on a musical phrase boundary.
+     */
+    private fun findMidTrackTransitionPoint(
+        coreFrames: FloatArray,
+        coreStartMs: Long,
+        durationMs: Long,
+        mixOutMs: Long
+    ): Long {
+        val minMidMs = (durationMs * 0.44f).toLong().coerceAtLeast(22_000L)
+        val maxMidMs = (durationMs * 0.62f).toLong().coerceAtMost((mixOutMs - 8000L).coerceAtLeast(minMidMs))
+        if (coreFrames.size < 100 || maxMidMs <= minMidMs) {
+            return ((minMidMs + maxMidMs) / 2L).coerceIn(15_000L, mixOutMs)
+        }
+
+        // Group 20ms frames into 500ms blocks (25 frames per block)
+        val blockSize = 25
+        val numBlocks = coreFrames.size / blockSize
+        if (numBlocks < 4) return ((minMidMs + maxMidMs) / 2L)
+
+        val blockEnergy = FloatArray(numBlocks)
+        for (b in 0 until numBlocks) {
+            var sum = 0f
+            val offset = b * blockSize
+            for (k in 0 until blockSize) {
+                sum += coreFrames[offset + k]
+            }
+            blockEnergy[b] = sum / blockSize
+        }
+
+        // 1. Find the strongest chorus peak in the first 60% of the middle window
+        val peakSearchEnd = (numBlocks * 0.60f).toInt().coerceAtLeast(1)
+        var peakBlock = 0
+        var peakVal = -1f
+        for (b in 0 until peakSearchEnd) {
+            if (blockEnergy[b] > peakVal) {
+                peakVal = blockEnergy[b]
+                peakBlock = b
+            }
+        }
+
+        // 2. Find the subsequent breakdown / energy valley after the chorus peak
+        var bestValleyBlock = (peakBlock + 2).coerceAtMost(numBlocks - 1)
+        var minValleyVal = Float.MAX_VALUE
+        for (b in bestValleyBlock until numBlocks) {
+            if (blockEnergy[b] < minValleyVal) {
+                minValleyVal = blockEnergy[b]
+                bestValleyBlock = b
+            }
+        }
+
+        // Start the mix ~2.5s before the valley floor so the incoming track layers into the breakdown
+        val candidateMs = coreStartMs + (bestValleyBlock * 500L) - 2500L
+        return candidateMs.coerceIn(minMidMs, maxMidMs)
     }
 
     /**
@@ -342,12 +409,14 @@ class AudioAnalysisEngine(private val context: Context) {
         val energy = 0.55f + ((abs(song.id.hashCode()) % 35) / 100f)
         val mixDuration = 10500L
         val mixOut = (duration - mixDuration - 3500L).coerceAtLeast((duration * 0.68f).toLong())
+        val midMixOut = (duration * 0.50f).toLong().coerceAtMost(mixOut)
         return TrackAnalysis(
             songId = song.id,
             bpm = bpm,
             energy = energy.coerceIn(0.25f, 0.90f),
             cueInMs = 800L,
             mixOutMs = mixOut,
+            midMixOutMs = midMixOut,
             crossfadeDurationMs = mixDuration,
             durationMs = duration
         )
@@ -365,14 +434,16 @@ class AudioAnalysisEngine(private val context: Context) {
             val array = JSONArray(jsonStr)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
+                val dur = obj.getLong("durationMs")
                 val item = TrackAnalysis(
                     songId = obj.getLong("songId"),
                     bpm = obj.getDouble("bpm").toFloat(),
                     energy = obj.getDouble("energy").toFloat(),
                     cueInMs = obj.getLong("cueInMs"),
                     mixOutMs = obj.getLong("mixOutMs"),
+                    midMixOutMs = obj.optLong("midMixOutMs", (dur * 0.50f).toLong()),
                     crossfadeDurationMs = obj.getLong("crossfadeDurationMs"),
-                    durationMs = obj.getLong("durationMs")
+                    durationMs = dur
                 )
                 memoryCache[item.songId] = item
             }
@@ -389,6 +460,7 @@ class AudioAnalysisEngine(private val context: Context) {
                     put("energy", item.energy.toDouble())
                     put("cueInMs", item.cueInMs)
                     put("mixOutMs", item.mixOutMs)
+                    put("midMixOutMs", item.midMixOutMs)
                     put("crossfadeDurationMs", item.crossfadeDurationMs)
                     put("durationMs", item.durationMs)
                 }

@@ -3,6 +3,22 @@ package com.sona.player.automix
 import com.sona.player.data.model.Song
 
 /**
+ * Automix operating mode:
+ * - [OFF]: Standard sequential playback without DJ transitions.
+ * - [CLASSIC_OUTRO]: Mixes in the musical outro phrase (last 12..18s of the track).
+ * - [QUICK_MID_MIX]: Club Megamix / DJ Set mode — finds the post-chorus breakdown near the middle
+ *   of the track (44%..64%) and transitions early for a fast-paced continuous mix.
+ */
+enum class AutomixMode(
+    val displayName: String,
+    val shortLabel: String
+) {
+    OFF("Automix Off", "OFF"),
+    CLASSIC_OUTRO("Outro Automix", "OUTRO"),
+    QUICK_MID_MIX("Mid-Track DJ Mix", "MID DJ")
+}
+
+/**
  * Automatically selected DJ transition toolset based on BPM proximity, energy delta, and groove structure.
  */
 enum class AutomixTransitionTool(
@@ -45,19 +61,36 @@ data class TrackAnalysis(
     val bpm: Float,
     val energy: Float,               // Normalized perceptual intensity (0.0f .. 1.0f)
     val cueInMs: Long,               // Optimal start point skipping leading silence / weak intro
-    val mixOutMs: Long,              // Optimal point in the outro to start crossfading to next song
+    val mixOutMs: Long,              // Optimal point in the outro (70%..88%) to start crossfading
+    val midMixOutMs: Long = (durationMs * 0.52f).toLong(), // Optimal breakdown point near middle (44%..64%)
     val crossfadeDurationMs: Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
     val durationMs: Long
 ) {
     /**
-     * Normalized fraction (0.0f .. 0.95f) along the track where the Automix Zone begins.
+     * Returns the active mix-out timestamp in milliseconds for the chosen [AutomixMode].
      */
-    val automixZoneFraction: Float
-        get() = if (durationMs > 0L) {
-            (mixOutMs.toFloat() / durationMs.toFloat()).coerceIn(0.62f, 0.94f)
-        } else {
-            0.82f
+    fun effectiveMixOutMs(mode: AutomixMode): Long {
+        return when (mode) {
+            AutomixMode.QUICK_MID_MIX -> midMixOutMs
+            else -> mixOutMs
         }
+    }
+
+    /**
+     * Normalized fraction along the track where the Automix Zone begins for the given [AutomixMode].
+     */
+    fun effectiveZoneFraction(mode: AutomixMode): Float {
+        if (durationMs <= 0L) return if (mode == AutomixMode.QUICK_MID_MIX) 0.52f else 0.82f
+        val targetMs = effectiveMixOutMs(mode)
+        return if (mode == AutomixMode.QUICK_MID_MIX) {
+            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.42f, 0.66f)
+        } else {
+            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.62f, 0.94f)
+        }
+    }
+
+    val automixZoneFraction: Float
+        get() = effectiveZoneFraction(AutomixMode.CLASSIC_OUTRO)
 }
 
 /**
@@ -86,6 +119,7 @@ data class SavedTransition(
  */
 data class AutomixTransitionState(
     val isEnabled: Boolean = true,
+    val mode: AutomixMode = AutomixMode.CLASSIC_OUTRO,
     val isAnalyzing: Boolean = false,
     val currentAnalysis: TrackAnalysis? = null,
     val nextMatchedSong: Song? = null,

@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
+import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.data.model.Song
 import com.sona.player.ui.theme.rememberArtworkPalette
@@ -129,7 +130,8 @@ fun NowPlayingScreen(
     }
 
     val automixZoneFraction = if (automixState.isEnabled) {
-        automixState.currentAnalysis?.automixZoneFraction ?: 0.85f
+        automixState.currentAnalysis?.effectiveZoneFraction(automixState.mode)
+            ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) 0.50f else 0.85f
     } else {
         1.0f
     }
@@ -491,7 +493,7 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.65f)
                     )
 
-                    // Ненавязчивый индикатор текущего BPM и статуса Automix между таймкодами
+                    // Ненавязчивый индикатор текущего BPM и режима Automix (OUTRO / MID DJ) между таймкодами
                     val curBpm = automixState.currentAnalysis?.bpm?.roundToInt()
                     if (automixState.isEnabled && curBpm != null) {
                         val tempoTag = if (automixState.isTransitioning && automixState.activeTempoRatio != 1.0f) {
@@ -499,11 +501,16 @@ fun NowPlayingScreen(
                             val sign = if (pct > 0) "+" else ""
                             " ($sign$pct%)"
                         } else ""
+                        val modeTag = if (automixState.mode == AutomixMode.QUICK_MID_MIX) " • MID DJ" else ""
                         Text(
-                            text = "$curBpm BPM$tempoTag",
+                            text = "$curBpm BPM$tempoTag$modeTag",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
-                            color = if (automixState.isTransitioning) palette.secondaryAccent else Color.White.copy(alpha = 0.50f)
+                            color = if (automixState.isTransitioning || automixState.mode == AutomixMode.QUICK_MID_MIX) {
+                                palette.secondaryAccent
+                            } else {
+                                Color.White.copy(alpha = 0.50f)
+                            }
                         )
                     } else {
                         Spacer(modifier = Modifier.height(14.dp))
@@ -562,23 +569,43 @@ fun NowPlayingScreen(
                             }
                         }
 
-                        // Automix Expressive Toggle Pill (Monet TertiaryContainer & Tertiary)
+                        // Automix Expressive Mode Pill: cycles OUTRO -> MID DJ -> OFF
+                        val isMidMixMode = automixState.mode == AutomixMode.QUICK_MID_MIX
                         val automixBg by animateColorAsState(
-                            targetValue = if (isAutomixEnabled) palette.secondaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
+                            targetValue = when (automixState.mode) {
+                                AutomixMode.QUICK_MID_MIX -> palette.secondaryAccent.copy(alpha = 0.28f)
+                                AutomixMode.CLASSIC_OUTRO -> palette.secondaryContainer.copy(alpha = 0.85f)
+                                AutomixMode.OFF -> Color.White.copy(alpha = 0.12f)
+                            },
                             label = "AutomixBg"
                         )
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = automixBg,
-                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                            modifier = Modifier
+                                .height(40.dp)
+                                .clickable(onClick = onAutomixClick)
                         ) {
-                            IconButton(onClick = onAutomixClick) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
                                 Icon(
                                     imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = "Automix",
+                                    contentDescription = "Automix Mode",
                                     tint = if (isAutomixEnabled) palette.secondaryAccent else Color.White.copy(alpha = 0.7f),
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(18.dp)
                                 )
+                                if (isMidMixMode) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "MID",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = palette.secondaryAccent
+                                    )
+                                }
                             }
                         }
 
