@@ -41,10 +41,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -89,7 +93,7 @@ fun NowPlayingScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // 1. Полноэкранная обложка альбома на весь экран (фон)
+        // 1. Четкая полноэкранная обложка альбома на весь экран (базовый слой)
         if (song.albumArtUri != null) {
             AsyncImage(
                 model = song.albumArtUri,
@@ -113,7 +117,33 @@ fun NowPlayingScreen(
             }
         }
 
-        // 2. Мягкое затемнение сверху (чтобы статус-бар и иконка закрытия читались на светлых обложках)
+        // 2. Прогрессивный блюр обложки: размытая полноэкранная копия с альфа-маской (BlendMode.DstIn)
+        // Плавное нарастание блюра сверху вниз без видимых стыков и резких границ
+        if (song.albumArtUri != null) {
+            AsyncImage(
+                model = song.albumArtUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(30.dp)
+                    .graphicsLayer(alpha = 0.99f) // создаем отдельный слой рендеринга для DstIn маски
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0.0f to Color.Transparent,
+                                0.35f to Color.Transparent,
+                                0.60f to Color.Black.copy(alpha = 0.5f),
+                                0.85f to Color.Black
+                            ),
+                            blendMode = BlendMode.DstIn
+                        )
+                    }
+            )
+        }
+
+        // 3. Мягкое затемнение сверху (чтобы статус-бар и иконка закрытия читались на светлых обложках)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -129,18 +159,17 @@ fun NowPlayingScreen(
                 )
         )
 
-        // 3. Плавный градиент-затухание внизу перед элементами управления (без обрыва и без сплошного блюр-блока)
+        // 4. Плавное градиентное затемнение под элементами управления
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxSize(0.65f)
-                .align(Alignment.BottomCenter)
+                .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         0.0f to Color.Transparent,
-                        0.35f to Color.Black.copy(alpha = 0.25f),
-                        0.65f to Color.Black.copy(alpha = 0.60f),
-                        1.0f to Color.Black.copy(alpha = 0.88f)
+                        0.35f to Color.Transparent,
+                        0.58f to Color.Black.copy(alpha = 0.25f),
+                        0.78f to Color.Black.copy(alpha = 0.65f),
+                        1.0f to Color.Black.copy(alpha = 0.90f)
                     )
                 )
         )
