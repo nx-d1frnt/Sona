@@ -357,21 +357,45 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Стильная капсула Automix: показывает «Automixing → [Следующий трек] • BPM» во время сведения или в зоне микса
+                // Стильная капсула Automix: показывает фазу DJ-сведения («High-Pass Blend», «Bass Swap», «Filter Sweep») или «Up Next»
                 val nextTrack = automixState.nextMatchedSong
-                val showAutomixBanner = automixState.isEnabled &&
-                    (automixState.isTransitioning || progress >= automixZoneFraction) &&
-                    nextTrack != null &&
-                    nextTrack.id != song.id
+                val targetTrack = automixState.transitionTargetSong ?: nextTrack
+                val showAutomixBanner = automixState.isEnabled && (
+                    (automixState.isTransitioning && targetTrack != null) ||
+                        (progress >= automixZoneFraction && nextTrack != null && nextTrack.id != song.id)
+                    )
 
                 AnimatedContent(
                     targetState = showAutomixBanner,
                     transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
                     label = "AutomixBannerTransition"
                 ) { showBanner ->
-                    if (showBanner && nextTrack != null && nextTrack.id != song.id) {
-                        val bpmText = automixState.nextMatchedAnalysis?.bpm?.roundToInt()
-                            ?: automixState.currentAnalysis?.bpm?.roundToInt()
+                    if (showBanner) {
+                        val bpmText = (if (automixState.isTransitioning) {
+                            automixState.currentAnalysis?.bpm ?: automixState.nextMatchedAnalysis?.bpm
+                        } else {
+                            automixState.nextMatchedAnalysis?.bpm ?: automixState.currentAnalysis?.bpm
+                        })?.roundToInt()
+
+                        val bannerLabel = if (automixState.isTransitioning && targetTrack != null) {
+                            val pct = (automixState.transitionProgress * 100f).roundToInt().coerceIn(1, 100)
+                            val djStage = when {
+                                automixState.transitionProgress < 0.44f -> "Automix (EQ High-Pass) → ${targetTrack.title}"
+                                automixState.transitionProgress < 0.56f -> "Automix (Bass Swap!) → ${targetTrack.title}"
+                                else -> "Automix (LPF Sweep $pct%)"
+                            }
+                            if (bpmText != null && automixState.transitionProgress < 0.56f) {
+                                "$djStage • $bpmText BPM"
+                            } else if (bpmText != null) {
+                                "$djStage • $bpmText BPM"
+                            } else {
+                                djStage
+                            }
+                        } else {
+                            val upcomingTitle = nextTrack?.title ?: ""
+                            val suffix = if (bpmText != null) " • $bpmText BPM" else ""
+                            "Up Next → $upcomingTitle$suffix"
+                        }
 
                         Surface(
                             shape = RoundedCornerShape(14.dp),
@@ -394,10 +418,8 @@ fun NowPlayingScreen(
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                val prefix = if (automixState.isTransitioning) "Automixing (EQ) → " else "Up Next → "
-                                val suffix = if (bpmText != null) " • $bpmText BPM" else ""
                                 Text(
-                                    text = "$prefix${nextTrack.title}$suffix",
+                                    text = bannerLabel,
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.SemiBold,
                                     color = Color.White,

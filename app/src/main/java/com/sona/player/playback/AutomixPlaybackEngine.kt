@@ -224,6 +224,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     currentPositionMs = deck.currentPosition.coerceAtLeast(0L),
                     automix = _playerState.value.automix.copy(
                         currentAnalysis = song?.let { analysisEngine.getCached(it.id) },
+                        transitionTargetSong = null,
                         nextMatchedSong = upcomingSong,
                         nextMatchedAnalysis = upcomingAnalysis,
                         isTransitioning = false,
@@ -286,6 +287,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             currentPositionMs = 0L,
             automix = _playerState.value.automix.copy(
                 currentAnalysis = cachedAnalysis,
+                transitionTargetSong = null,
                 nextMatchedSong = playlist.getOrNull(safeIndex + 1),
                 nextMatchedAnalysis = playlist.getOrNull(safeIndex + 1)?.let { analysisEngine.getCached(it.id) },
                 isTransitioning = false,
@@ -520,16 +522,16 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         val curAnalysis = automix.currentAnalysis
         val mixOutMs = curAnalysis?.mixOutMs
-            ?: (durationMs - 8000L).coerceAtLeast((durationMs * 0.80f).toLong())
+            ?: (durationMs - 14000L).coerceAtLeast((durationMs * 0.70f).toLong())
 
         if (durationMs < 20_000L) return // Skip Automix for very short audio clips
 
-        // 1. Pre-buffer the inactive deck 6 seconds before the Automix Zone starts
-        if (positionMs >= (mixOutMs - 6000L) && isPrebufferedForIndex != nextIndex) {
+        // 1. Pre-buffer the inactive deck 7 seconds before the Automix Zone starts
+        if (positionMs >= (mixOutMs - 7000L) && isPrebufferedForIndex != nextIndex) {
             prebufferInactiveDeck(nextIndex)
         }
 
-        // 2. Trigger the Equal-Power Crossfade + DJ EQ Transition + Tempo Sync when entering the Automix Zone
+        // 2. Trigger the DJ Automix (High-Pass Blend -> Bass Swap -> Low-Pass Filter Sweep) when entering the Automix Zone
         if (positionMs >= mixOutMs && positionMs < durationMs - 2500L) {
             startCrossfadeTransition(nextIndex, nextSong)
         }
@@ -567,13 +569,14 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val nextAnalysis = analysisEngine.getCached(nextSong.id)
             ?: _playerState.value.automix.nextMatchedAnalysis
 
-        val crossfadeDurationMs = (curAnalysis?.crossfadeDurationMs ?: 7500L).coerceIn(5000L, 10_000L)
+        val crossfadeDurationMs = (curAnalysis?.crossfadeDurationMs ?: 10_500L).coerceIn(8500L, 13_000L)
 
-        // Ensure nextMatchedSong is strictly the incoming nextSong before crossfade starts
+        // Ensure transitionTargetSong & nextMatchedSong are explicitly set before transition starts
         _playerState.value = _playerState.value.copy(
             automix = _playerState.value.automix.copy(
                 isTransitioning = true,
                 transitionProgress = 0f,
+                transitionTargetSong = nextSong,
                 nextMatchedSong = nextSong,
                 nextMatchedAnalysis = nextAnalysis,
                 activeTempoRatio = 1.0f
@@ -581,7 +584,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         )
 
         crossfadeJob = scope.launch {
-            // Initialize DJ EQ Transition (incoming starts with High-Pass Bass Cut)
+            // Initialize DJ EQ Transition (incoming starts with High-Pass + 2-Pole Bass Kill)
             outgoingEq.updateOutgoingEq(0f)
             incomingEq.updateIncomingEq(0f)
 
@@ -593,6 +596,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
             val stepMs = 50L
             val totalSteps = (crossfadeDurationMs / stepMs).toInt().coerceAtLeast(20)
+            var hasSwappedActiveDeck = false
 
             for (step in 1..totalSteps) {
                 if (!isActive) break
@@ -605,37 +609,76 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     outgoingDeck.volume = 0f
                 }
 
-                // 1. Update real-time DJ Isolator EQ Filters (Bass Swap at t=0.45..0.58 + Low-Pass Tail)
+                // 1. Update real-time 2-Pole DJ Isolator & Filter Sweep (Bass Swap at t=0.44..0.54 + Exponential LPF Tail)
                 outgoingEq.updateOutgoingEq(t)
                 incomingEq.updateIncomingEq(t)
 
-                // 2. Equal-Power Crossfade curves: cos(t * PI/2) and sin(t * PI/2)
-                val outGain = cos(t * PI * 0.5).toFloat()
-                val inGain = sin(t * PI * 0.5).toFloat()
+                // 2. Club DJ Plateau Volume Envelopes:
+                // Both tracks stay loud in the center overlap while separated by EQ frequency bands!
+                val outGain = when {
+                    t < 0.45f -> 1.0f - (t / 0.45f) * 0.12f // Holds 100%..88% while driving the bass
+                    else -> {
+                        val tailFrac = ((t - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                        0.88f * cos(tailFrac * PI * 0.5).toFloat() // Fades out while LPF sweeps 15kHz -> 260Hz
+                    }
+                }
+                val inGain = when {
+                    t < 0.44f -> sin((t / 0.44f) * PI * 0.5).toFloat() * 0.84f // Rises briskly to 84% (High-Passed)
+                    t < 0.54f -> 0.84f + ((t - 0.44f) / 0.10f) * 0.16f          // Punches to 100% right on Bass Swap!
+                    else -> 1.0f
+                }
 
                 if (outgoingDeck.isPlaying) {
                     outgoingDeck.volume = (outGain * duckMultiplier).coerceIn(0f, 1f)
                 }
                 incomingDeck.volume = (inGain * duckMultiplier).coerceIn(0f, 1f)
 
-                // Update transition progress for UI (outgoing song remains currentSong until crossfade completes)
-                _playerState.value = _playerState.value.copy(
-                    automix = _playerState.value.automix.copy(
-                        isTransitioning = true,
-                        transitionProgress = t,
-                        nextMatchedSong = nextSong,
-                        nextMatchedAnalysis = nextAnalysis,
-                        activeTempoRatio = 1.0f
+                // Right on the DJ Bass Swap (t >= 0.50f), swap active deck to incoming track AND
+                // advance nextMatchedSong to (nextIndex + 1) so the banner never duplicates currentSong!
+                if (t >= 0.50f && !hasSwappedActiveDeck) {
+                    hasSwappedActiveDeck = true
+                    activeDeck = incomingDeck
+                    inactiveDeck = outgoingDeck
+                    mediaSession?.player = activeDeck
+
+                    val upcomingAfterNext = playlist.getOrNull(nextIndex + 1)
+                    val upcomingAfterNextAnalysis = upcomingAfterNext?.let { analysisEngine.getCached(it.id) }
+                    val newDuration = activeDeck.duration.takeIf { it > 0 } ?: nextSong.durationMs
+
+                    _playerState.value = _playerState.value.copy(
+                        currentSong = nextSong,
+                        currentIndex = nextIndex,
+                        durationMs = newDuration,
+                        currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L),
+                        automix = _playerState.value.automix.copy(
+                            currentAnalysis = nextAnalysis,
+                            transitionTargetSong = nextSong,
+                            nextMatchedSong = upcomingAfterNext,
+                            nextMatchedAnalysis = upcomingAfterNextAnalysis,
+                            isTransitioning = true,
+                            transitionProgress = t,
+                            activeTempoRatio = 1.0f
+                        )
                     )
-                )
+                } else {
+                    _playerState.value = _playerState.value.copy(
+                        automix = _playerState.value.automix.copy(
+                            isTransitioning = true,
+                            transitionProgress = t,
+                            transitionTargetSong = nextSong,
+                            activeTempoRatio = 1.0f
+                        )
+                    )
+                }
 
                 delay(stepMs)
             }
 
-            // Crossfade complete: make incomingDeck the active deck
-            activeDeck = incomingDeck
-            inactiveDeck = outgoingDeck
-            mediaSession?.player = activeDeck
+            if (!hasSwappedActiveDeck) {
+                activeDeck = incomingDeck
+                inactiveDeck = outgoingDeck
+                mediaSession?.player = activeDeck
+            }
 
             // Stop and reset the old outgoing deck & both EQ processors
             outgoingDeck.pause()
@@ -659,6 +702,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L),
                 automix = _playerState.value.automix.copy(
                     currentAnalysis = nextAnalysis,
+                    transitionTargetSong = null,
                     nextMatchedSong = upcomingSong,
                     nextMatchedAnalysis = upcomingAnalysis,
                     isTransitioning = false,
@@ -708,6 +752,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L),
                 automix = _playerState.value.automix.copy(
                     currentAnalysis = nextAnalysis,
+                    transitionTargetSong = null,
                     nextMatchedSong = upcomingSong,
                     nextMatchedAnalysis = upcomingAnalysis,
                     isTransitioning = false,
@@ -747,6 +792,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             automix = _playerState.value.automix.copy(
                 isTransitioning = false,
                 transitionProgress = 0f,
+                transitionTargetSong = null,
                 nextMatchedSong = upcomingSong,
                 nextMatchedAnalysis = upcomingAnalysis,
                 activeTempoRatio = 1.0f

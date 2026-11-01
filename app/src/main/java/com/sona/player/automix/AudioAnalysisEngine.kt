@@ -30,7 +30,7 @@ import kotlin.math.sqrt
 class AudioAnalysisEngine(private val context: Context) {
 
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
-    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v1.json")
+    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v2.json")
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
 
     init {
@@ -59,12 +59,12 @@ class AudioAnalysisEngine(private val context: Context) {
     private fun decodeAndAnalyze(song: Song): TrackAnalysis {
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
-        // 1. Sample 3 compact windows: Intro (first 6s), Core (8s in middle), Outro (last 10s)
+        // 1. Sample 3 windows: Intro (first 10s), Core (8s in middle), Outro (last 24s for phrase detection)
         val introFrames = extractEnergyEnvelope(
             song = song,
             startMs = 0L,
-            windowDurationMs = min(6_000L, durationMs / 3),
-            frameDurationMs = 50 // 20 Hz envelope for intro silence detection
+            windowDurationMs = min(10_000L, durationMs / 3),
+            frameDurationMs = 50 // 20 Hz envelope for intro beat/groove detection
         )
 
         val coreStartMs = (durationMs * 0.38f).toLong()
@@ -75,13 +75,13 @@ class AudioAnalysisEngine(private val context: Context) {
             frameDurationMs = 20 // 50 Hz high-res envelope for BPM onset autocorrelation
         )
 
-        val outroWindowMs = min(10_000L, durationMs / 3)
+        val outroWindowMs = min(24_000L, durationMs / 3)
         val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
         val outroFrames = extractEnergyEnvelope(
             song = song,
             startMs = outroStartMs,
             windowDurationMs = outroWindowMs,
-            frameDurationMs = 50 // 20 Hz envelope for outro fade-out detection
+            frameDurationMs = 50 // 20 Hz envelope for outro phrase & fade-out detection
         )
 
         if (coreFrames.isEmpty()) {
@@ -98,43 +98,45 @@ class AudioAnalysisEngine(private val context: Context) {
         // 3. Compute BPM via onset flux autocorrelation on 50 Hz core envelope
         val estimatedBpm = estimateBpmFromEnvelope(coreFrames, envelopeHz = 50f, songId = song.id)
 
-        // 4. Compute Cue-In point (skip leading silence / very low intro noise)
+        // 4. Compute DJ Beat Cue-In point (skip quiet ambient intro / silence right up to the first real groove/beat)
         val cueInMs = if (introFrames.isNotEmpty()) {
-            val threshold = max(0.012f, peakRms * 0.12f)
-            val firstActiveFrame = introFrames.indexOfFirst { it >= threshold }
-            if (firstActiveFrame > 0) {
-                // Step back 100ms before the transient attack so we don't clip the first beat
-                (firstActiveFrame * 50L - 100L).coerceIn(0L, 6500L)
+            val beatThreshold = max(0.022f, avgRms * 0.32f)
+            val firstGrooveFrame = introFrames.indexOfFirst { it >= beatThreshold }
+            if (firstGrooveFrame > 2) {
+                // Step back 150ms before the first beat transient so the attack is crisp
+                (firstGrooveFrame * 50L - 150L).coerceIn(0L, 8000L)
             } else {
-                0L
+                val silenceThreshold = max(0.012f, peakRms * 0.12f)
+                val firstSoundFrame = introFrames.indexOfFirst { it >= silenceThreshold }
+                if (firstSoundFrame > 0) (firstSoundFrame * 50L - 100L).coerceIn(0L, 5000L) else 0L
             }
         } else {
             0L
         }
 
-        // 5. Recommended Crossfade Duration based on BPM & Energy
-        // Faster / higher-energy tracks get tighter mixes (6-7.5s); slower/melodic tracks get 8-10s
+        // 5. Recommended DJ Transition Duration based on BPM (8 bars / 16 beats of musical overlap)
         val recommendedMixDurationMs = when {
-            estimatedBpm >= 135f -> 6500L
-            estimatedBpm >= 118f -> 7500L
-            else -> 9000L
+            estimatedBpm >= 132f -> 9500L
+            estimatedBpm >= 112f -> 11000L
+            else -> 12500L
         }
 
-        // 6. Compute Mix-Out point in the outro (where energy drops below 38% of core RMS or trailing silence starts)
+        // 6. Compute Musical Outro Phrase Mix-Out point (starts 12..20s before EOF where outro phrase begins)
         val mixOutMs = if (outroFrames.size > 20) {
-            val fadeThreshold = max(0.018f, avgRms * 0.38f)
-            var lastLoudFrame = outroFrames.size - 1
-            while (lastLoudFrame > 0 && outroFrames[lastLoudFrame] < fadeThreshold) {
-                lastLoudFrame--
+            // Find where the track drops below 52% of its core energy (outro breakdown) or before trailing silence
+            val phraseThreshold = max(0.025f, avgRms * 0.52f)
+            var lastEnergeticFrame = outroFrames.size - 1
+            while (lastEnergeticFrame > 0 && outroFrames[lastEnergeticFrame] < phraseThreshold) {
+                lastEnergeticFrame--
             }
-            val audibleEndMs = outroStartMs + (lastLoudFrame * 50L)
-            // Start the crossfade so that the incoming track reaches full volume right as the audible end fades
-            val calculatedMixOut = audibleEndMs - (recommendedMixDurationMs * 0.78f).toLong()
-            val minMixOut = (durationMs * 0.68f).toLong()
-            val maxMixOut = (durationMs - recommendedMixDurationMs).coerceAtLeast(minMixOut)
+            val phraseEndMs = outroStartMs + (lastEnergeticFrame * 50L)
+            // Start the mix so the Bass Swap (50% of mix) hits right around phraseEndMs - 2.5s
+            val calculatedMixOut = phraseEndMs - recommendedMixDurationMs - 2000L
+            val minMixOut = (durationMs * 0.62f).toLong()
+            val maxMixOut = (durationMs - recommendedMixDurationMs - 2500L).coerceAtLeast(minMixOut)
             calculatedMixOut.coerceIn(minMixOut, maxMixOut)
         } else {
-            (durationMs - recommendedMixDurationMs - 1500L).coerceAtLeast((durationMs * 0.75f).toLong())
+            (durationMs - recommendedMixDurationMs - 3000L).coerceAtLeast((durationMs * 0.70f).toLong())
         }
 
         return TrackAnalysis(
@@ -336,13 +338,13 @@ class AudioAnalysisEngine(private val context: Context) {
         val duration = song.durationMs.coerceAtLeast(15_000L)
         val bpm = fallbackBpmForId(song.id)
         val energy = 0.55f + ((abs(song.id.hashCode()) % 35) / 100f)
-        val mixDuration = 7500L
-        val mixOut = (duration - mixDuration - 1500L).coerceAtLeast((duration * 0.78f).toLong())
+        val mixDuration = 10500L
+        val mixOut = (duration - mixDuration - 3500L).coerceAtLeast((duration * 0.68f).toLong())
         return TrackAnalysis(
             songId = song.id,
             bpm = bpm,
             energy = energy.coerceIn(0.25f, 0.90f),
-            cueInMs = 200L,
+            cueInMs = 800L,
             mixOutMs = mixOut,
             crossfadeDurationMs = mixDuration,
             durationMs = duration

@@ -34,6 +34,7 @@ data class AutomixTransitionState(
     val currentAnalysis: TrackAnalysis? = null,
     val nextMatchedSong: Song? = null,
     val nextMatchedAnalysis: TrackAnalysis? = null,
+    val transitionTargetSong: Song? = null, // Track being mixed into during an active transition
     val matchScorePercent: Int = 0,
     val isTransitioning: Boolean = false,
     val transitionProgress: Float = 0f,     // 0.0f (start of mix) .. 1.0f (mix completed)
