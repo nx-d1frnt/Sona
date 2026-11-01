@@ -564,9 +564,10 @@ private fun TransitionConnectorItem(
                             savedTransition != null -> {
                                 val bpmFrom = savedTransition.fromBpm.roundToInt()
                                 val bpmTo = savedTransition.toBpm.roundToInt()
-                                val mixSec = ((savedTransition.overlapDurationMs / 100L).toFloat() / 10f)
+                                val cueSec = savedTransition.cueInMs / 1000L
+                                val cueTag = if (cueSec >= 2L) " • In @ 0:%02d".format(cueSec) else ""
                                 val prefix = if (isPastTransition) "Mixed: " else ""
-                                "$prefix${savedTransition.transitionStyle} • $bpmFrom→$bpmTo BPM (${mixSec}s)"
+                                "$prefix${savedTransition.transitionTool.shortBadge} • $bpmFrom→$bpmTo BPM$cueTag"
                             }
                             else -> "Smart DJ EQ Transition (Analyzing...)"
                         }

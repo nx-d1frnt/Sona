@@ -60,12 +60,24 @@ data class TrackAnalysis(
     val songId: Long,
     val bpm: Float,
     val energy: Float,               // Normalized perceptual intensity (0.0f .. 1.0f)
-    val cueInMs: Long,               // Optimal start point skipping leading silence / weak intro
+    val cueInMs: Long,               // Smart phrase/beat-aligned entry point (skips intros/skits up to 24s)
     val mixOutMs: Long,              // Optimal point in the outro (70%..88%) to start crossfading
     val crossfadeDurationMs: Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
     val durationMs: Long,
-    val midMixOutMs: Long = (durationMs * 0.52f).toLong() // Optimal breakdown point near middle (44%..64%)
+    val midMixOutMs: Long = (durationMs * 0.52f).toLong(), // Optimal breakdown point near middle (44%..64%)
+    val deepCueInMs: Long = cueInMs  // Deeper hook/drop entry point (up to 32s) for Mid-Track DJ & high-energy mixes
 ) {
+    /**
+     * Returns the optimal entry point (Cue-In) in milliseconds for the incoming track,
+     * adapting to the active [AutomixMode] and the outgoing track's energy.
+     */
+    fun effectiveCueInMs(mode: AutomixMode, outgoingEnergy: Float = 0.6f): Long {
+        return when {
+            mode == AutomixMode.QUICK_MID_MIX -> deepCueInMs
+            outgoingEnergy >= 0.68f && deepCueInMs > cueInMs + 3500L -> deepCueInMs
+            else -> cueInMs
+        }
+    }
     /**
      * Returns the active mix-out timestamp in milliseconds for the chosen [AutomixMode].
      */

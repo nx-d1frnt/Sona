@@ -600,6 +600,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     }
 
     private fun rebuildSavedTransitions(currentIndex: Int) {
+        val activeMode = _playerState.value.automix.mode
         for (i in 0 until (playlist.size - 1)) {
             val songA = playlist[i]
             val songB = playlist[i + 1]
@@ -613,6 +614,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 toSongId = songB.id,
                 fromAnalysis = analysisA,
                 toAnalysis = analysisB,
+                mode = activeMode,
                 isCompleted = completed
             )
         }
@@ -748,7 +750,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         if (nextIndex !in playlist.indices) return
         val nextSong = playlist[nextIndex]
         val nextAnalysis = analysisEngine.getCached(nextSong.id)
-        val cueInMs = nextAnalysis?.cueInMs ?: 0L
+        val curEnergy = _playerState.value.automix.currentAnalysis?.energy ?: 0.6f
+        val mode = _playerState.value.automix.mode
+        val cueInMs = nextAnalysis?.effectiveCueInMs(mode, curEnergy) ?: 0L
 
         val items = buildMediaItems(playlist)
         inactiveDeck.pause()
@@ -781,6 +785,14 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val nextAnalysis = analysisEngine.getCached(nextSong.id)
             ?: _playerState.value.automix.nextMatchedAnalysis
 
+        // Ensure incomingDeck is positioned at the smart entry point (in case analysis finished after prebuffer)
+        val activeMode = _playerState.value.automix.mode
+        val curEnergy = curAnalysis?.energy ?: 0.6f
+        val targetCueInMs = nextAnalysis?.effectiveCueInMs(activeMode, curEnergy) ?: 0L
+        if (targetCueInMs > 500L && kotlin.math.abs(incomingDeck.currentPosition - targetCueInMs) > 900L) {
+            incomingDeck.seekTo(nextIndex, targetCueInMs)
+        }
+
         val crossfadeDurationMs = customDurationMs
             ?: (curAnalysis?.crossfadeDurationMs ?: 10_500L).coerceIn(8500L, 13_000L)
 
@@ -807,6 +819,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 toSongId = nextSong.id,
                 fromAnalysis = curAnalysis,
                 toAnalysis = nextAnalysis,
+                mode = activeMode,
                 isCompleted = false
             )
             userLockedNextForSongId.add(outgoingSong.id)

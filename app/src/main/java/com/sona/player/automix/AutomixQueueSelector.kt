@@ -140,6 +140,7 @@ object AutomixQueueSelector {
         toSongId: Long,
         fromAnalysis: TrackAnalysis,
         toAnalysis: TrackAnalysis,
+        mode: AutomixMode = AutomixMode.CLASSIC_OUTRO,
         isCompleted: Boolean = false
     ): SavedTransition {
         val rawScore = computeCompatibilityScore(fromAnalysis, toAnalysis)
@@ -147,6 +148,7 @@ object AutomixQueueSelector {
         val tool = selectOptimalTransitionTool(fromAnalysis, toAnalysis)
         val (_, inRatio) = computeTempoSyncRatios(fromAnalysis.bpm, toAnalysis.bpm)
         val syncPct = ((inRatio - 1.0f) * 100f).roundToInt()
+        val targetCueInMs = toAnalysis.effectiveCueInMs(mode, fromAnalysis.energy)
 
         return SavedTransition(
             fromSongId = fromSongId,
@@ -155,7 +157,7 @@ object AutomixQueueSelector {
             toBpm = toAnalysis.bpm,
             matchScorePercent = scorePct,
             overlapDurationMs = fromAnalysis.crossfadeDurationMs,
-            cueInMs = toAnalysis.cueInMs,
+            cueInMs = targetCueInMs,
             transitionTool = tool,
             transitionStyle = "${tool.shortBadge} (${tool.toolsSummary})",
             tempoSyncPercent = syncPct,

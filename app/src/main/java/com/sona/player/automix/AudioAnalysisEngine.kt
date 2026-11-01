@@ -30,7 +30,7 @@ import kotlin.math.sqrt
 class AudioAnalysisEngine(private val context: Context) {
 
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
-    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v3.json")
+    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v4.json")
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
 
     init {
@@ -61,12 +61,13 @@ class AudioAnalysisEngine(private val context: Context) {
     private fun decodeAndAnalyze(song: Song): TrackAnalysis {
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
-        // 1. Sample 3 windows: Intro (first 10s), Core (8s in middle), Outro (last 24s for phrase detection)
+        // 1. Sample 3 windows: Intro (first 26s for deep beat/drop cue-in search), Core (15s in middle), Outro (last 24s)
+        val introWindowMs = min(26_000L, (durationMs * 38L) / 100L)
         val introFrames = extractEnergyEnvelope(
             song = song,
             startMs = 0L,
-            windowDurationMs = min(10_000L, durationMs / 3),
-            frameDurationMs = 50 // 20 Hz envelope for intro beat/groove detection
+            windowDurationMs = introWindowMs,
+            frameDurationMs = 25 // 40 Hz high-res envelope to detect drum transients & beat drops in the intro
         )
 
         val coreStartMs = (durationMs * 0.40f).toLong()
@@ -101,28 +102,24 @@ class AudioAnalysisEngine(private val context: Context) {
         // 3. Compute BPM via onset flux autocorrelation on 50 Hz core envelope
         val estimatedBpm = estimateBpmFromEnvelope(coreFrames, envelopeHz = 50f, songId = song.id)
 
-        // 4. Compute DJ Beat Cue-In point (skip quiet ambient intro / silence right up to the first real groove/beat)
-        val cueInMs = if (introFrames.isNotEmpty()) {
-            val beatThreshold = max(0.022f, avgRms * 0.32f)
-            val firstGrooveFrame = introFrames.indexOfFirst { it >= beatThreshold }
-            if (firstGrooveFrame > 2) {
-                // Step back 150ms before the first beat transient so the attack is crisp
-                (firstGrooveFrame * 50L - 150L).coerceIn(0L, 8000L)
-            } else {
-                val silenceThreshold = max(0.012f, peakRms * 0.12f)
-                val firstSoundFrame = introFrames.indexOfFirst { it >= silenceThreshold }
-                if (firstSoundFrame > 0) (firstSoundFrame * 50L - 100L).coerceIn(0L, 5000L) else 0L
-            }
-        } else {
-            0L
-        }
-
-        // 5. Recommended DJ Transition Duration based on BPM (8 bars / 16 beats of musical overlap)
+        // 4. Recommended DJ Transition Duration based on BPM (8 bars / 16 beats of musical overlap)
         val recommendedMixDurationMs = when {
             estimatedBpm >= 132f -> 9500L
             estimatedBpm >= 112f -> 11000L
             else -> 12500L
         }
+
+        // 5. Compute Smart Phrase & Beat-Drop Entry Points (cueInMs & deepCueInMs)
+        // Enters away from 0:00 whenever a track has a slow/ambient/beatless intro, aligning the beat drop with the Bass Swap!
+        val (cueInMs, deepCueInMs) = findSmartEntryPoints(
+            introFrames = introFrames,
+            frameDurationMs = 25L,
+            avgCoreRms = avgRms,
+            peakCoreRms = peakRms,
+            estimatedBpm = estimatedBpm,
+            recommendedMixDurationMs = recommendedMixDurationMs,
+            durationMs = durationMs
+        )
 
         // 6. Compute Musical Outro Phrase Mix-Out point (starts 12..20s before EOF where outro phrase begins)
         val mixOutMs = if (outroFrames.size > 20) {
@@ -157,9 +154,132 @@ class AudioAnalysisEngine(private val context: Context) {
             cueInMs = cueInMs,
             mixOutMs = mixOutMs,
             midMixOutMs = midMixOutMs,
+            deepCueInMs = deepCueInMs,
             crossfadeDurationMs = recommendedMixDurationMs,
             durationMs = durationMs
         )
+    }
+
+    /**
+     * Analyzes the first 26s of the track (in 500ms musical blocks combining RMS energy + percussive onset flux)
+     * to find:
+     * 1. [cueInMs]: Skips beatless intros, skits, ambient pads, and slow build-ups so the incoming track's
+     *    first real beat/drop lands right on the DJ Bass Swap (50% of transition).
+     * 2. [deepCueInMs]: Finds a deeper high-energy hook/drop entry point (up to 26s into the track) for
+     *    Mid-Track DJ mode and high-energy transitions.
+     */
+    private fun findSmartEntryPoints(
+        introFrames: FloatArray,
+        frameDurationMs: Long,
+        avgCoreRms: Float,
+        peakCoreRms: Float,
+        estimatedBpm: Float,
+        recommendedMixDurationMs: Long,
+        durationMs: Long
+    ): Pair<Long, Long> {
+        if (introFrames.size < 40) return 0L to min(4000L, durationMs / 6)
+
+        // First audible sound frame (skip pure digital silence)
+        val silenceThreshold = max(0.014f, peakCoreRms * 0.10f)
+        val firstAudibleIdx = introFrames.indexOfFirst { it >= silenceThreshold }.coerceAtLeast(0)
+        val firstAudibleMs = (firstAudibleIdx * frameDurationMs - 100L).coerceAtLeast(0L)
+
+        // Group 25ms frames into 500ms phrase blocks (20 frames per block)
+        val framesPerBlock = (500L / frameDurationMs).toInt().coerceAtLeast(4)
+        val numBlocks = introFrames.size / framesPerBlock
+        if (numBlocks < 6) return firstAudibleMs to firstAudibleMs
+
+        val blockRms = FloatArray(numBlocks)
+        val blockOnset = FloatArray(numBlocks)
+        val blockGroove = FloatArray(numBlocks)
+
+        for (b in 0 until numBlocks) {
+            var rmsSum = 0f
+            var fluxSum = 0f
+            val startIdx = b * framesPerBlock
+            for (k in 0 until framesPerBlock) {
+                val cur = introFrames[startIdx + k]
+                val prev = if (startIdx + k > 0) introFrames[startIdx + k - 1] else cur
+                rmsSum += cur
+                if (cur > prev) {
+                    fluxSum += (cur - prev)
+                }
+            }
+            blockRms[b] = rmsSum / framesPerBlock
+            blockOnset[b] = fluxSum / framesPerBlock
+            // Combined groove intensity: weights percussive transient punch heavily so beatless pads score low
+            blockGroove[b] = blockRms[b] * 0.55f + blockOnset[b] * 2.2f
+        }
+
+        val maxIntroGroove = (blockGroove.maxOrNull() ?: avgCoreRms).coerceAtLeast(0.02f)
+
+        // Detect the biggest upward "Beat Drop / Groove Entry" step-jump across adjacent 2-second windows (4 blocks)
+        var bestJumpBlock = -1
+        var bestJumpRatio = 1.0f
+        val fullGrooveThreshold = max(avgCoreRms * 0.58f, maxIntroGroove * 0.62f)
+
+        for (b in 3 until numBlocks - 2) {
+            val beforeAvg = (blockGroove[b - 3] + blockGroove[b - 2] + blockGroove[b - 1]) / 3f
+            val afterAvg = (blockGroove[b] + blockGroove[b + 1] + blockGroove[b + 2]) / 3f
+            // If the section after block b is strong and significantly punchier than the intro before it:
+            if (afterAvg >= fullGrooveThreshold * 0.80f && afterAvg > beforeAvg * 1.38f) {
+                val jumpScore = (afterAvg - beforeAvg) / beforeAvg.coerceAtLeast(0.015f)
+                if (jumpScore > bestJumpRatio) {
+                    bestJumpRatio = jumpScore
+                    bestJumpBlock = b
+                }
+            }
+        }
+
+        // Also find the first block that reaches full sustained groove energy
+        val firstFullGrooveBlock = blockGroove.indexOfFirst { it >= fullGrooveThreshold }
+
+        // Determine where the main beat/groove actually kicks in
+        val beatDropBlock = when {
+            bestJumpBlock >= 4 -> bestJumpBlock
+            firstFullGrooveBlock >= 4 -> firstFullGrooveBlock
+            else -> firstFullGrooveBlock.coerceAtLeast(0)
+        }
+        val beatDropMs = beatDropBlock * 500L
+
+        // One 4-beat bar duration in ms (e.g. 2000ms at 120 BPM)
+        val barMs = ((60_000f / estimatedBpm.coerceIn(75f, 170f)) * 4f).toLong().coerceIn(1400L, 3200L)
+        // Pre-roll so that if the beat drops late in the intro, the Bass Swap (at ~48% of mix) lands on the Beat Drop!
+        val bassSwapLeadMs = (recommendedMixDurationMs * 0.44f).toLong().coerceIn(barMs, barMs * 2)
+
+        val maxAllowedCueMs = (durationMs * 0.28f).toLong().coerceAtMost(24_000L)
+
+        val smartCueInMs = when {
+            // Case A: Track has a long intro/skit/ambient build-up before the beat drops (>= 5.0s)
+            beatDropMs >= 5000L -> {
+                // If the pre-drop section is audible (a riser/vocal intro), start `bassSwapLeadMs` before the drop
+                // so the pre-drop plays during the High-Pass entry and the Beat Drop hits right on the Bass Swap!
+                // If the pre-drop was practically silent/quiet, jump closer (1 bar before the drop).
+                val preDropRms = blockRms[(beatDropBlock - 2).coerceAtLeast(0)]
+                val leadIn = if (preDropRms >= avgCoreRms * 0.25f) bassSwapLeadMs else (barMs / 2)
+                (beatDropMs - leadIn).coerceIn(firstAudibleMs, maxAllowedCueMs)
+            }
+            // Case B: Track starts with a moderate 2..5s intro before the beat
+            beatDropMs >= 2000L -> {
+                (beatDropMs - (barMs / 2)).coerceIn(firstAudibleMs, maxAllowedCueMs)
+            }
+            // Case C: Track drops the beat right away, but check if there's a stronger 8-bar phrase drop later
+            else -> firstAudibleMs
+        }
+
+        // Compute deepCueInMs: look in the 8s .. 25s region for the strongest hook/drop phrase
+        var deepestPeakBlock = beatDropBlock
+        var deepestPeakScore = -1f
+        val deepStartBlock = (8000L / 500L).toInt().coerceAtMost(numBlocks - 1)
+        for (b in deepStartBlock until numBlocks) {
+            if (blockGroove[b] > deepestPeakScore) {
+                deepestPeakScore = blockGroove[b]
+                deepestPeakBlock = b
+            }
+        }
+        val deepTargetMs = (deepestPeakBlock * 500L - barMs).coerceIn(smartCueInMs, maxAllowedCueMs)
+
+        return smartCueInMs to deepTargetMs
     }
 
     /**
@@ -442,6 +562,7 @@ class AudioAnalysisEngine(private val context: Context) {
                     cueInMs = obj.getLong("cueInMs"),
                     mixOutMs = obj.getLong("mixOutMs"),
                     midMixOutMs = obj.optLong("midMixOutMs", (dur * 0.50f).toLong()),
+                    deepCueInMs = obj.optLong("deepCueInMs", obj.getLong("cueInMs")),
                     crossfadeDurationMs = obj.getLong("crossfadeDurationMs"),
                     durationMs = dur
                 )
@@ -461,6 +582,7 @@ class AudioAnalysisEngine(private val context: Context) {
                     put("cueInMs", item.cueInMs)
                     put("mixOutMs", item.mixOutMs)
                     put("midMixOutMs", item.midMixOutMs)
+                    put("deepCueInMs", item.deepCueInMs)
                     put("crossfadeDurationMs", item.crossfadeDurationMs)
                     put("durationMs", item.durationMs)
                 }
