@@ -31,6 +31,10 @@ class MusicPlayerManager(private val context: Context) {
 
     val playerState: StateFlow<PlayerState> = engine.playerState
 
+    fun needsLibraryAnalysis(songId: Long) = engine.needsLibraryAnalysis(songId)
+
+    suspend fun analyzeLibrarySong(song: Song, force: Boolean) = engine.analyzeLibrarySong(song, force)
+
     fun init() {
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()

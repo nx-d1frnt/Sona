@@ -29,7 +29,7 @@ internal object MusicalCueSelector {
         .maxByOrNull { it.confidence }
 
     fun outgoing(track: TrackAnalysis, baseMs: Long, overlapMs: Long, early: Boolean): Long {
-        val minimum = if (early) max(150_000L, (track.durationMs * 0.55).toLong())
+        val minimum = if (early) max(90_000L, (track.durationMs * 0.52).toLong())
             else (track.durationMs * 0.70).toLong()
         val lower = max(minimum, baseMs - 1500L)
         val upper = min(baseMs + 4000L, track.durationMs - overlapMs - 500L)

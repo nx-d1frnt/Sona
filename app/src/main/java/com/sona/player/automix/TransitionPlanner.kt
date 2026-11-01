@@ -43,11 +43,12 @@ internal object TransitionPlanner {
         val resolved = from.resolveEffectiveMode(mode, to)
         val baseDuration = customDurationMs?.coerceIn(800L, 13_000L)
             ?: if (resolved == AutomixMode.QUICK_MID_MIX) 8500L else from.crossfadeDurationMs.coerceIn(8500L, 13_000L)
-        val baseOut = actualOutPositionMs ?: from.effectiveMixOutMs(mode, to)
+        val defaultOut = actualOutPositionMs ?: from.effectiveMixOutMs(mode, to)
+        val baseOut = if (actualOutPositionMs != null) defaultOut else pairMixOut(from, to, mode, defaultOut, baseDuration)
         val baseIn = to.effectiveCueInMs(mode, from.energy, from)
-        val rawOut = actualOutPositionMs ?: if (resolved == AutomixMode.QUICK_MID_MIX) from.midMixOutMs else from.mixOutMs
-        val outBeat = MusicalCueSelector.beatSection(from, baseOut)
-        val inBeat = MusicalCueSelector.beatSection(to, baseIn)
+        val rawOut = actualOutPositionMs ?: if (resolved == AutomixMode.QUICK_MID_MIX) baseOut else from.mixOutMs
+        val outBeat = rhythmSection(from, baseOut)
+        val inBeat = rhythmSection(to, baseIn)
         val bpm = outBeat?.bpm
         val period = if (bpm != null) 60_000f / bpm else null
         val gap = if (outBeat != null && inBeat != null) {
@@ -64,12 +65,12 @@ internal object TransitionPlanner {
         // Whole-track handoff: preserve the outgoing vocal while a measured instrumental intro enters.
         val outgoingVoice = MusicalCueSelector.vocalRisk(from, rawOut, rawOut + 1000L)
         if (outgoingVoice != null && outgoingVoice >= 0.35f && (gap == null || gap <= 0.12f)) {
-            val voiceEnd = (rawOut + 1000L..rawOut + 4000L step 250L).firstOrNull {
+            val voiceEnd = (rawOut + 1000L..rawOut + 6000L step 250L).firstOrNull {
                 (MusicalCueSelector.vocalRisk(from, it, it + 1000L) ?: 1f) < 0.20f
             }
             if (voiceEnd != null) {
                 val introLeadMs = ((voiceEnd - rawOut + 750L) * ratios.second / ratios.first).toLong()
-                val instrumentalCue = (baseIn..minOf(baseIn + 5000L, 24_000L, to.durationMs - baseDuration) step 250L)
+                val instrumentalCue = (0L..minOf(baseIn + 5000L, 24_000L, to.durationMs - baseDuration) step 250L)
                     .firstOrNull { (MusicalCueSelector.vocalRisk(to, it, it + introLeadMs) ?: 1f) < 0.20f }
                 if (instrumentalCue != null && rawOut >= 0 && rawOut + baseDuration < from.durationMs) {
                     tool = AutomixTransitionTool.VOCAL_HANDOFF
@@ -82,14 +83,15 @@ internal object TransitionPlanner {
         if (tool != AutomixTransitionTool.VOCAL_HANDOFF) {
             val outVoice = MusicalCueSelector.vocalRisk(from, baseOut, baseOut + 2000L)
             val inVoice = MusicalCueSelector.vocalRisk(to, baseIn, baseIn + 2000L)
-            if (gap != null && gap > 0.12f && outVoice != null && outVoice < 0.25f &&
-                inVoice != null && inVoice < 0.25f) {
+            if (outBeat != null && inBeat != null &&
+                (gap!! > 0.06f || abs(from.energy - to.energy) >= 0.18f) && outVoice != null && outVoice < 0.35f &&
+                inVoice != null && inVoice < 0.35f) {
                 tool = AutomixTransitionTool.BEAT_CUT
                 duration = ((period ?: 500f) * 2).toLong().coerceIn(1000L, 2000L)
                 cue = nearestBeat(to, baseIn) ?: baseIn
                 out = if (actualOutPositionMs == null) nearestBeat(from, baseOut) ?: baseOut else baseOut
-            } else if (period != null && ((gap != null && gap > 0.12f) ||
-                    (outVoice != null && outVoice > 0.5f && inVoice != null && inVoice > 0.5f))) {
+            } else if (period != null && ((gap != null && gap > 0.06f) ||
+                    (outVoice != null && outVoice > 0.35f && inVoice != null && inVoice > 0.35f))) {
                 tool = AutomixTransitionTool.ECHO_OUT
                 duration = (period * 6).toLong().coerceIn(2500L, 4500L)
             }
@@ -105,8 +107,36 @@ internal object TransitionPlanner {
             outgoingGain = LoudnessNormalizer.gain(from, out), incomingGain = LoudnessNormalizer.gain(to, cue))
     }
 
+    /** Re-evaluate the outgoing window for this particular incoming vocal, not just the song alone. */
+    private fun pairMixOut(from: TrackAnalysis, to: TrackAnalysis, mode: AutomixMode,
+                           base: Long, overlap: Long): Long {
+        val cue = to.effectiveCueInMs(mode, from.energy, from)
+        val incomingVoice = MusicalCueSelector.vocalRisk(to, cue, cue + 3000L) ?: return base
+        if (incomingVoice < 0.35f) return base // Leave room for vocal handoff into an instrumental intro.
+        val early = from.resolveEffectiveMode(mode, to) == AutomixMode.QUICK_MID_MIX
+        val lower = maxOf(base - 6000L, if (early) maxOf(90_000L, (from.durationMs * 0.52).toLong())
+            else (from.durationMs * 0.70).toLong())
+        val upper = minOf(base + 6000L, from.durationMs - overlap - 500L,
+            if (early) (from.durationMs * 0.67).toLong() else from.durationMs)
+        if (upper < lower) return base
+        fun score(position: Long): Float {
+            val voice = MusicalCueSelector.vocalRisk(from, position, position + 3000L) ?: return Float.POSITIVE_INFINITY
+            return voice * incomingVoice + abs(position - base) / 6000f * 0.12f
+        }
+        val candidates = (lower..upper step 500L).toList() + base
+        val best = candidates.minByOrNull { score(it) } ?: base
+        return if (score(best) < score(base)) best else base
+    }
+
+    // Style selection tolerates moderate rhythm evidence; tempo stretching still uses
+    // MusicalCueSelector's stricter 0.65 threshold and residual-tempo check.
+    private fun rhythmSection(track: TrackAnalysis, position: Long): BeatSection? = track.beatSections
+        .filter { it.confidence >= 0.45f && it.bpm.isFinite() && it.bpm > 0 &&
+            position in it.startMs..it.endMs && it.beatsMs.size >= 6 }
+        .maxByOrNull { it.confidence }
+
     private fun nearestBeat(track: TrackAnalysis, position: Long): Long? =
-        MusicalCueSelector.beatSection(track, position)?.beatsMs
+        rhythmSection(track, position)?.beatsMs
             ?.filter { it >= position && it <= position + 750L }?.minOrNull()
 }
 

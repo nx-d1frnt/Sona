@@ -6,6 +6,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,6 +68,10 @@ fun MainScreen(
     val uiState by viewModel.uiState.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val analysis by viewModel.libraryAnalysis.collectAsState()
+    val canAnalyze by viewModel.canAnalyze.collectAsState()
+    var settingsOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    var forceAnalysis by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var isNowPlayingExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -76,6 +83,11 @@ fun MainScreen(
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold
                     )
+                },
+                actions = {
+                    IconButton(onClick = { settingsOpen = true }) {
+                        Icon(Icons.Rounded.Settings, contentDescription = "Настройки")
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
@@ -195,6 +207,59 @@ fun MainScreen(
                 }
             }
         }
+    }
+
+    if (settingsOpen) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { settingsOpen = false },
+            title = { Text("Настройки автомикса") },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
+                ) {
+                    Text("Анализ всей библиотеки", style = MaterialTheme.typography.titleMedium)
+                    Text("Распознаёт вокал, ритм, громкость и точки переходов. Результаты сохраняются на устройстве и используются повторно.")
+                    Text("Обработка ждёт паузы в воспроизведении. Держите приложение открытым до завершения; после закрытия можно продолжить с сохранённых результатов.",
+                        style = MaterialTheme.typography.bodySmall)
+                    if (!analysis.running) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.Checkbox(
+                                checked = forceAnalysis,
+                                onCheckedChange = { forceAnalysis = it }
+                            )
+                            Text("Пересчитать даже сохранённые треки", modifier = Modifier
+                                .weight(1f).clickable { forceAnalysis = !forceAnalysis })
+                        }
+                        if (forceAnalysis) Text("Повторный анализ всей библиотеки может занять много времени и расходует заряд.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (analysis.total > 0) {
+                        Text(when {
+                            analysis.running && analysis.waitingForPlayback -> "Ожидание паузы в воспроизведении"
+                            analysis.running -> "Анализ: ${analysis.title}"
+                            analysis.cancelled -> "Анализ остановлен"
+                            else -> "Анализ завершён"
+                        })
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { analysis.completed.toFloat() / analysis.total },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text("${analysis.completed} из ${analysis.total} • Из кэша: ${analysis.cached} • Ошибок: ${analysis.failed}",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (analysis.running) {
+                        androidx.compose.material3.OutlinedButton(onClick = viewModel::cancelLibraryAnalysis) { Text("Остановить анализ") }
+                    } else {
+                        Button(onClick = { viewModel.startLibraryAnalysis(forceAnalysis) }, enabled = canAnalyze) {
+                            Text(if (forceAnalysis) "Пересчитать всю библиотеку" else "Анализировать библиотеку")
+                        }
+                        if (!canAnalyze) Text("Для запуска нужен доступ к непустой музыкальной библиотеке.")
+                    }
+                }
+            },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { settingsOpen = false }) { Text("Закрыть") } }
+        )
     }
 
     // Full Screen Now Playing Overlay

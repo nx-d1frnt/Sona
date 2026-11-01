@@ -936,7 +936,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         if (durationMs < 20_000L) return // Skip Automix for very short audio clips
 
         // 1. Pre-buffer the inactive deck 7 seconds before the Automix Zone starts
-        if (positionMs >= (mixOutMs - 7000L) && isPrebufferedForIndex != nextIndex) {
+        if (positionMs >= (mixOutMs - 7000L)) {
             prebufferInactiveDeck(nextIndex)
         }
 
@@ -946,6 +946,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         }
     }
 
+    private var prebufferedSongId: Long? = null
+    private var prebufferedPlan: TransitionPlan? = null
+
     private fun prebufferInactiveDeck(nextIndex: Int) {
         if (nextIndex !in playlist.indices) return
         val nextSong = playlist[nextIndex]
@@ -954,6 +957,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val curEnergy = curAnalysis?.energy ?: 0.6f
         val mode = _playerState.value.automix.mode
         val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, mode) else null
+        if (isPrebufferedForIndex == nextIndex && prebufferedSongId == nextSong.id && prebufferedPlan == plan) return
         val cueInMs = plan?.cueInMs ?: nextAnalysis?.effectiveCueInMs(mode, curEnergy, curAnalysis) ?: 0L
 
         val items = buildMediaItems(playlist)
@@ -965,6 +969,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         inactiveDeck.setMediaItems(items, nextIndex, cueInMs)
         inactiveDeck.prepare()
         isPrebufferedForIndex = nextIndex
+        prebufferedSongId = nextSong.id
+        prebufferedPlan = plan
     }
 
     private fun startCrossfadeTransition(
@@ -974,9 +980,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     ) {
         if (crossfadeJob?.isActive == true) return
 
-        if (isPrebufferedForIndex != nextIndex) {
-            prebufferInactiveDeck(nextIndex)
-        }
+        prebufferInactiveDeck(nextIndex)
 
         val outgoingDeck = activeDeck
         val incomingDeck = inactiveDeck

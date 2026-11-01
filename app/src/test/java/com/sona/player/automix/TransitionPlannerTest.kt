@@ -61,6 +61,37 @@ class TransitionPlannerTest {
         assertNotEquals(AutomixTransitionTool.ECHO_OUT, plan.tool)
     }
 
+    @Test fun moderateMeasuredRhythmAndEnergyChangeEnableShortMixWithoutTempoStretch() {
+        val outgoing = from().copy(beatSections = from().beatSections.map { it.copy(confidence = 0.5f) })
+        val incoming = to(122f).copy(energy = 0.45f)
+        val plan = TransitionPlanner.plan(outgoing, incoming, AutomixMode.AUTO_DJ)
+        assertEquals(AutomixTransitionTool.BEAT_CUT, plan.tool)
+        assertEquals(1f, plan.outgoingTempoRatio, 0f)
+        assertEquals(1f, plan.incomingTempoRatio, 0f)
+    }
+
+    @Test fun moderateVocalConflictEnablesEchoEvenWithMatchedTempos() {
+        val outgoing = from().copy(vocalSections = listOf(VocalSection(270_000, 300_000, 0.45f)))
+        val incoming = to().copy(vocalSections = listOf(VocalSection(0, 24_000, 0.45f)))
+        assertEquals(AutomixTransitionTool.ECHO_OUT,
+            TransitionPlanner.plan(outgoing, incoming, AutomixMode.AUTO_DJ).tool)
+    }
+
+    @Test fun changingNextTrackRebuildsOutgoingPointForItsVocalEntry() {
+        val outgoing = from().copy(durationMs = 360_000L, mixOutMs = 300_000L,
+            vocalSections = listOf(VocalSection(270_000, 300_000, 0.01f),
+                VocalSection(300_000, 304_000, 0.9f), VocalSection(304_000, 308_000, 0.01f),
+                VocalSection(308_000, 360_000, 0.9f)))
+        val instrumental = to()
+        val vocal = to().copy(songId = 3, vocalSections = listOf(VocalSection(0, 24_000, 0.9f)))
+        val first = TransitionPlanner.plan(outgoing, instrumental, AutomixMode.AUTO_DJ)
+        val second = TransitionPlanner.plan(outgoing, vocal, AutomixMode.AUTO_DJ)
+        assertNotEquals(first.mixOutMs, second.mixOutMs)
+        assertTrue((MusicalCueSelector.vocalRisk(outgoing, second.mixOutMs, second.mixOutMs + 3000L) ?: 1f) < 0.20f)
+        assertTrue(kotlin.math.abs(second.mixOutMs - first.mixOutMs) <= 6000L)
+        assertSame(first, TransitionPlanner.plan(outgoing, instrumental, AutomixMode.AUTO_DJ))
+    }
+
     @Test fun queueMetadataAndPlaybackUseTheSameToolCueAndDuration() {
         val outgoing = from()
         val incoming = to(160f)

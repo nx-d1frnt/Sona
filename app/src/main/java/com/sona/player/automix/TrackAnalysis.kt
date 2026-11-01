@@ -116,34 +116,41 @@ data class TrackAnalysis(
         // AUTO is a listening mode: BPM/energy similarity alone cannot justify cutting a song.
         // Unknown/legacy/fallback analysis carries no structural confidence and uses the outro.
         val next = nextAnalysis ?: return AutomixMode.CLASSIC_OUTRO
-        if (durationMs < 240_000L || !midMixConfidence.isFinite() || midMixConfidence < 0.80f) {
+        if (durationMs < 180_000L || !midMixConfidence.isFinite() || midMixConfidence < 0.60f) {
             return AutomixMode.CLASSIC_OUTRO
         }
-        val earliestMidMs = maxOf(150_000L, (durationMs * 0.55).toLong())
+        val earliestMidMs = maxOf(90_000L, (durationMs * 0.52).toLong())
         if (midMixOutMs < earliestMidMs || midMixOutMs > (durationMs * 0.67).toLong() ||
-            mixOutMs - midMixOutMs < 30_000L
+            mixOutMs - midMixOutMs < 25_000L
         ) return AutomixMode.CLASSIC_OUTRO
 
         if (!bpm.isFinite() || !next.bpm.isFinite() || bpm <= 0f || next.bpm <= 0f ||
             !energy.isFinite() || !next.energy.isFinite() ||
-            energy < 0.60f || next.energy < 0.58f || abs(energy - next.energy) > 0.12f
+            energy < 0.40f || next.energy < 0.40f || abs(energy - next.energy) > 0.30f
         ) return AutomixMode.CLASSIC_OUTRO
 
         // A breakdown with continuing vocals is not a safe place for an automatic early exit.
-        val vocalRisk = MusicalCueSelector.vocalRisk(this, midMixOutMs, midMixOutMs + 8500L)
-            ?: return AutomixMode.CLASSIC_OUTRO
-        if (vocalRisk >= 0.30f) return AutomixMode.CLASSIC_OUTRO
+        if (autoMidCue() == null) return AutomixMode.CLASSIC_OUTRO
 
         val directDiff = abs(bpm - next.bpm)
         val halfDiff = abs(bpm - next.bpm * 0.5f)
         val doubleDiff = abs(bpm - next.bpm * 2.0f)
         val relativeBpmDiff = min(directDiff, min(halfDiff, doubleDiff)) / bpm
-        return if (relativeBpmDiff <= 0.04f) {
+        return if (relativeBpmDiff <= 0.18f) {
             AutomixMode.QUICK_MID_MIX
         } else {
             AutomixMode.CLASSIC_OUTRO
         }
     }
+
+    // The detector leads the energy boundary by a bar. Look through that boundary
+    // for a short measured vocal pause, rather than requiring an entire overlap to be silent.
+    internal fun autoMidCue(): Long? = (midMixOutMs..midMixOutMs + 6000L step 500L)
+        .firstOrNull { cue ->
+            cue <= (durationMs * 0.67).toLong() && mixOutMs - cue >= 25_000L &&
+                (MusicalCueSelector.vocalRisk(this, cue, cue + 1000L) ?: 1f) < 0.25f &&
+                (MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) ?: 1f) < 0.35f
+        }
 
     /**
      * Returns the optimal entry point (Cue-In) in milliseconds for the incoming track,
@@ -172,7 +179,9 @@ data class TrackAnalysis(
     fun effectiveMixOutMs(mode: AutomixMode, nextAnalysis: TrackAnalysis? = null): Long {
         val resolved = resolveEffectiveMode(mode, nextAnalysis)
         val early = resolved == AutomixMode.QUICK_MID_MIX
-        val base = if (early) midMixOutMs else mixOutMs
+        val base = if (early && mode == AutomixMode.AUTO_DJ) autoMidCue() ?: midMixOutMs
+            else if (early) midMixOutMs else mixOutMs
+        if (early && mode == AutomixMode.AUTO_DJ) return base
         // Explicit Mid DJ retains its broad search range; AUTO keeps the conservative minimum.
         if (early && mode == AutomixMode.QUICK_MID_MIX) return base
         return MusicalCueSelector.outgoing(this, base, if (early) 8500L else crossfadeDurationMs, early)

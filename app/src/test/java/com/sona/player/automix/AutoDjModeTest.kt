@@ -20,7 +20,7 @@ class AutoDjModeTest {
     }
 
     @Test fun normalLengthSongsKeepOutroEvenWhenLoudAndTempoMatched() {
-        for (duration in listOf(155_000L, 195_000L, 225_000L, 239_999L)) {
+        for (duration in listOf(155_000L, 179_999L)) {
             val track = current.copy(
                 durationMs = duration, midMixOutMs = (duration * 0.60).toLong(),
                 mixOutMs = duration - 14_000L
@@ -34,7 +34,7 @@ class AutoDjModeTest {
 
     @Test fun longEnergeticSongsNeedMeasuredStructure() {
         assertOutro(current.copy(midMixConfidence = 0f))
-        assertOutro(current.copy(midMixConfidence = 0.79f))
+        assertOutro(current.copy(midMixConfidence = 0.59f))
         assertOutro(current.copy(midMixConfidence = Float.NaN))
     }
 
@@ -47,15 +47,15 @@ class AutoDjModeTest {
 
     @Test fun earlyPointMustLeaveEnoughMusicAndTimeBeforeOutro() {
         assertOutro(current.copy(midMixOutMs = 149_999L))
-        assertOutro(current.copy(midMixOutMs = 160_000L))
+        assertOutro(current.copy(midMixOutMs = 155_000L))
         assertOutro(current.copy(midMixOutMs = 220_000L))
-        assertOutro(current.copy(mixOutMs = 205_000L))
+        assertOutro(current.copy(mixOutMs = 204_000L))
     }
 
     @Test fun incompatiblePairKeepsOutro() {
-        assertOutro(current, next.copy(bpm = 136f))
-        assertOutro(current, next.copy(energy = 0.90f))
-        assertOutro(current, next.copy(energy = 0.40f))
+        assertOutro(current, next.copy(bpm = 150f))
+        assertOutro(current, next.copy(energy = 0.35f))
+        assertOutro(current, next.copy(energy = 0.39f))
         assertOutro(current, next.copy(bpm = Float.NaN))
         assertOutro(current, next.copy(bpm = 0f))
     }
@@ -65,6 +65,15 @@ class AutoDjModeTest {
         assertEquals(current.midMixOutMs, current.effectiveMixOutMs(AutomixMode.AUTO_DJ, next))
         assertEquals(AutomixMode.QUICK_MID_MIX,
             current.resolveEffectiveMode(AutomixMode.AUTO_DJ, next.copy(bpm = 60f)))
+    }
+
+    @Test fun ordinaryThreeMinuteTrackCanUseMeasuredBreakdown() {
+        val track = current.copy(durationMs = 195_000L, midMixOutMs = 112_000L,
+            mixOutMs = 180_000L, midMixConfidence = 0.65f,
+            vocalSections = listOf(VocalSection(112_000L, 116_000L, 0.9f),
+                VocalSection(116_000L, 120_000L, 0.05f)))
+        assertEquals(AutomixMode.QUICK_MID_MIX, track.resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
+        assertEquals(116_000L, track.effectiveMixOutMs(AutomixMode.AUTO_DJ, next))
     }
 
     @Test fun explicitMidModeRemainsAvailableWithoutConfidence() {
