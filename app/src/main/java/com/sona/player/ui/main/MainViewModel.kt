@@ -94,4 +94,5 @@ class MainViewModel(
     fun seekTo(positionMs: Long) = playerManager.seekTo(positionMs)
     fun toggleShuffle() = playerManager.toggleShuffle()
     fun toggleRepeat() = playerManager.toggleRepeatMode()
+    fun toggleAutomix() = playerManager.toggleAutomix()
 }

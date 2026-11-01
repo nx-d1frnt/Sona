@@ -1,11 +1,13 @@
 package com.sona.player.ui.components
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -80,8 +82,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
+import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.data.model.Song
 import com.sona.player.ui.theme.rememberArtworkPalette
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,18 +96,20 @@ fun NowPlayingScreen(
     durationMs: Long,
     isShuffle: Boolean,
     repeatMode: Int,
+    automixState: AutomixTransitionState = AutomixTransitionState(),
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
     onPreviousClick: () -> Unit,
     onShuffleClick: () -> Unit,
     onRepeatClick: () -> Unit,
+    onAutomixClick: () -> Unit = {},
     onSeek: (Long) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     if (song == null) return
 
-    // Динамическое извлечение цветов прямо из обложки текущего трека (Вариант 4)
+    // Динамическое извлечение палитры Monet прямо из обложки текущего трека
     val palette = rememberArtworkPalette(song.albumArtUri)
 
     var isUserSeeking by remember { mutableFloatStateOf(-1f) }
@@ -115,59 +121,76 @@ fun NowPlayingScreen(
         0f
     }
 
+    val automixZoneFraction = if (automixState.isEnabled) {
+        automixState.currentAnalysis?.automixZoneFraction ?: 0.85f
+    } else {
+        1.0f
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // 1. Четкая полноэкранная обложка альбома на весь экран (базовый слой)
-        if (song.albumArtUri != null) {
-            AsyncImage(
-                model = song.albumArtUri,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MusicNote,
+        // 1. Четкая полноэкранная обложка с плавным растворением (Crossfade) в пике Automix-перехода
+        Crossfade(
+            targetState = song.albumArtUri,
+            animationSpec = tween(durationMillis = 900),
+            label = "FullScreenCoverCrossfade"
+        ) { targetArtUri ->
+            if (targetArtUri != null) {
+                AsyncImage(
+                    model = targetArtUri,
                     contentDescription = null,
-                    modifier = Modifier.size(120.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MusicNote,
+                        contentDescription = null,
+                        modifier = Modifier.size(120.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                }
             }
         }
 
         // 2. Прогрессивный блюр обложки: размытая полноэкранная копия с альфа-маской (BlendMode.DstIn)
-        // Плавное нарастание блюра сверху вниз без видимых стыков и резких границ
-        if (song.albumArtUri != null) {
-            AsyncImage(
-                model = song.albumArtUri,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .blur(30.dp)
-                    .graphicsLayer(alpha = 0.99f) // создаем отдельный слой рендеринга для DstIn маски
-                    .drawWithContent {
-                        drawContent()
-                        drawRect(
-                            brush = Brush.verticalGradient(
-                                0.0f to Color.Transparent,
-                                0.35f to Color.Transparent,
-                                0.60f to Color.Black.copy(alpha = 0.5f),
-                                0.85f to Color.Black
-                            ),
-                            blendMode = BlendMode.DstIn
-                        )
-                    }
-            )
+        Crossfade(
+            targetState = song.albumArtUri,
+            animationSpec = tween(durationMillis = 900),
+            label = "ProgressiveBlurCrossfade"
+        ) { targetArtUri ->
+            if (targetArtUri != null) {
+                AsyncImage(
+                    model = targetArtUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(30.dp)
+                        .graphicsLayer(alpha = 0.99f)
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    0.0f to Color.Transparent,
+                                    0.35f to Color.Transparent,
+                                    0.60f to Color.Black.copy(alpha = 0.5f),
+                                    0.85f to Color.Black
+                                ),
+                                blendMode = BlendMode.DstIn
+                            )
+                        }
+                )
+            }
         }
 
         // 3. Мягкое затемнение сверху (чтобы статус-бар и иконка закрытия читались на светлых обложках)
@@ -324,14 +347,68 @@ fun NowPlayingScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Вариант 2: Фирменный волновой прогресс-бар Sona с подсветкой зоны Automix
+                // Стильная капсула Automix: показывает «Automixing → [Следующий трек] • BPM» во время сведения или в зоне микса
+                val showAutomixBanner = automixState.isEnabled &&
+                    (automixState.isTransitioning || progress >= automixZoneFraction) &&
+                    automixState.nextMatchedSong != null
+
+                AnimatedContent(
+                    targetState = showAutomixBanner,
+                    transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
+                    label = "AutomixBannerTransition"
+                ) { showBanner ->
+                    if (showBanner && automixState.nextMatchedSong != null) {
+                        val nextTrack = automixState.nextMatchedSong
+                        val bpmText = automixState.nextMatchedAnalysis?.bpm?.roundToInt()
+                            ?: automixState.currentAnalysis?.bpm?.roundToInt()
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = palette.secondaryContainer.copy(alpha = 0.72f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = palette.secondaryAccent,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                val prefix = if (automixState.isTransitioning) "Automixing → " else "Up Next → "
+                                val suffix = if (bpmText != null) " • $bpmText BPM" else ""
+                                Text(
+                                    text = "$prefix${nextTrack.title}$suffix",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                }
+
+                // Вариант 2: Фирменный волновой прогресс-бар Sona с реальной точкой аутро (automixZoneStartFraction)
                 ExpressiveWaveSlider(
                     progress = progress,
                     isPlaying = isPlaying,
                     primaryColor = palette.primaryAccent,
                     automixAccentColor = palette.secondaryAccent,
+                    automixZoneStartFraction = automixZoneFraction,
                     onValueChange = { isUserSeeking = it },
                     onValueChangeFinished = {
                         if (isUserSeeking >= 0f) {
@@ -362,35 +439,22 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.65f)
                     )
 
-                    // Индикатор зоны Automix при приближении к концу трека
-                    val isInAutomixZone = progress >= 0.85f
-                    AnimatedContent(
-                        targetState = isInAutomixZone,
-                        transitionSpec = { fadeIn() togetherWith fadeOut() },
-                        label = "AutomixBadge"
-                    ) { inZone ->
-                        if (inZone) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = null,
-                                    tint = palette.secondaryAccent,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                                Text(
-                                    text = "AUTOMIX ZONE",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 1.sp,
-                                    color = palette.secondaryAccent
-                                )
-                            }
-                        } else {
-                            Spacer(modifier = Modifier.height(14.dp))
-                        }
+                    // Ненавязчивый индикатор текущего BPM и статуса Automix между таймкодами
+                    val curBpm = automixState.currentAnalysis?.bpm?.roundToInt()
+                    if (automixState.isEnabled && curBpm != null) {
+                        val tempoTag = if (automixState.isTransitioning && automixState.activeTempoRatio != 1.0f) {
+                            val pct = ((automixState.activeTempoRatio - 1.0f) * 100f).roundToInt()
+                            val sign = if (pct > 0) "+" else ""
+                            " ($sign$pct%)"
+                        } else ""
+                        Text(
+                            text = "$curBpm BPM$tempoTag",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Medium,
+                            color = if (automixState.isTransitioning) palette.secondaryAccent else Color.White.copy(alpha = 0.50f)
+                        )
+                    } else {
+                        Spacer(modifier = Modifier.height(14.dp))
                     }
 
                     Text(
@@ -418,7 +482,7 @@ fun NowPlayingScreen(
                 Spacer(modifier = Modifier.height(20.dp))
 
                 // Дополнительный нижний ряд Material 3 Expressive в виде капсул (как на референсе)
-                var isAutomixEnabled by remember { mutableStateOf(true) }
+                val isAutomixEnabled = automixState.isEnabled
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -456,7 +520,7 @@ fun NowPlayingScreen(
                             color = automixBg,
                             modifier = Modifier.size(width = 48.dp, height = 40.dp)
                         ) {
-                            IconButton(onClick = { isAutomixEnabled = !isAutomixEnabled }) {
+                            IconButton(onClick = onAutomixClick) {
                                 Icon(
                                     imageVector = Icons.Rounded.AutoAwesome,
                                     contentDescription = "Automix",
