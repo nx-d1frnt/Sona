@@ -201,13 +201,13 @@ fun ExpressiveTransportControls(
                             tint = onPrimaryAccent,
                             modifier = Modifier.size(30.dp)
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = if (playing) "Pause" else "Play",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = onPrimaryAccent
-                        )
+//                        Spacer(modifier = Modifier.width(8.dp))
+//                        Text(
+//                           // text = if (playing) "Pause" else "Play",
+//                            style = MaterialTheme.typography.titleMedium,
+//                            fontWeight = FontWeight.Bold,
+//                            color = onPrimaryAccent
+//                        )
                     }
                 }
             }

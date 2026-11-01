@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.sona.player.data.model.Song
+import com.sona.player.ui.theme.rememberArtworkPalette
 
 @Composable
 fun MiniPlayer(
@@ -53,10 +54,12 @@ fun MiniPlayer(
     ) {
         if (song == null) return@AnimatedVisibility
 
+        val palette = rememberArtworkPalette(song.albumArtUri)
+
         Card(
             shape = RoundedCornerShape(24.dp),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                containerColor = palette.surfaceContainerTint
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
             modifier = Modifier
@@ -75,7 +78,7 @@ fun MiniPlayer(
                         modifier = Modifier
                             .size(48.dp)
                             .clip(RoundedCornerShape(14.dp))
-                            .background(MaterialTheme.colorScheme.primaryContainer),
+                            .background(palette.primaryContainer),
                         contentAlignment = Alignment.Center
                     ) {
                         if (song.albumArtUri != null) {
@@ -89,7 +92,7 @@ fun MiniPlayer(
                             Icon(
                                 imageVector = Icons.Rounded.MusicNote,
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                tint = palette.onPrimaryContainer,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -118,8 +121,8 @@ fun MiniPlayer(
                     FilledIconButton(
                         onClick = onPlayPauseClick,
                         colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
+                            containerColor = palette.primaryAccent,
+                            contentColor = palette.onPrimaryAccent
                         ),
                         modifier = Modifier.size(42.dp)
                     ) {
@@ -142,8 +145,8 @@ fun MiniPlayer(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(3.dp),
-                    color = MaterialTheme.colorScheme.primary,
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    color = palette.primaryAccent,
+                    trackColor = palette.primaryContainer.copy(alpha = 0.5f)
                 )
             }
         }

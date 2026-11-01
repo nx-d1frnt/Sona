@@ -446,9 +446,9 @@ fun NowPlayingScreen(
                             }
                         }
 
-                        // Automix Expressive Toggle Pill
+                        // Automix Expressive Toggle Pill (Monet TertiaryContainer & Tertiary)
                         val automixBg by animateColorAsState(
-                            targetValue = if (isAutomixEnabled) palette.secondaryAccent.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.12f),
+                            targetValue = if (isAutomixEnabled) palette.secondaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
                             label = "AutomixBg"
                         )
                         Surface(
@@ -466,27 +466,27 @@ fun NowPlayingScreen(
                             }
                         }
 
-                        // Shuffle pill
+                        // Shuffle pill (Monet PrimaryContainer & OnPrimaryContainer)
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = if (isShuffle) palette.primaryAccent.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.12f),
+                            color = if (isShuffle) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
                             modifier = Modifier.size(width = 48.dp, height = 40.dp)
                         ) {
                             IconButton(onClick = onShuffleClick) {
                                 Icon(
                                     imageVector = Icons.Rounded.Shuffle,
                                     contentDescription = "Shuffle",
-                                    tint = if (isShuffle) palette.primaryAccent else Color.White.copy(alpha = 0.85f),
+                                    tint = if (isShuffle) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
 
-                        // Repeat pill
+                        // Repeat pill (Monet PrimaryContainer & OnPrimaryContainer)
                         val isRepeatActive = repeatMode != Player.REPEAT_MODE_OFF
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = if (isRepeatActive) palette.primaryAccent.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.12f),
+                            color = if (isRepeatActive) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
                             modifier = Modifier.size(width = 48.dp, height = 40.dp)
                         ) {
                             IconButton(onClick = onRepeatClick) {
@@ -498,7 +498,7 @@ fun NowPlayingScreen(
                                 Icon(
                                     imageVector = icon,
                                     contentDescription = "Repeat",
-                                    tint = if (isRepeatActive) palette.primaryAccent else Color.White.copy(alpha = 0.85f),
+                                    tint = if (isRepeatActive) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
