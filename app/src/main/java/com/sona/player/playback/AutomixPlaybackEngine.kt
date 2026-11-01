@@ -21,6 +21,7 @@ import com.sona.player.automix.AudioAnalysisEngine
 import com.sona.player.automix.AutomixEqAudioProcessor
 import com.sona.player.automix.AutomixQueueSelector
 import com.sona.player.automix.AutomixTransitionState
+import com.sona.player.automix.AutomixTransitionTool
 import com.sona.player.automix.SavedTransition
 import com.sona.player.automix.TrackAnalysis
 import com.sona.player.data.model.Song
@@ -767,6 +768,19 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         activeTransitionTargetIndex = nextIndex
 
+        // Automatically select the optimal DJ Transition Toolset & BPM Tempo Sync Ratios
+        val selectedTool = if (curAnalysis != null && nextAnalysis != null) {
+            AutomixQueueSelector.selectOptimalTransitionTool(curAnalysis, nextAnalysis)
+        } else {
+            AutomixTransitionTool.BASS_SWAP_DROP
+        }
+
+        val (outTempoRatio, inTempoRatio) = if (curAnalysis != null && nextAnalysis != null) {
+            AutomixQueueSelector.computeTempoSyncRatios(curAnalysis.bpm, nextAnalysis.bpm)
+        } else {
+            1.0f to 1.0f
+        }
+
         // Lock this transition pair in savedTransitions so it is preserved
         if (outgoingSong != null && curAnalysis != null && nextAnalysis != null) {
             val key = SavedTransition.key(outgoingSong.id, nextSong.id)
@@ -787,20 +801,22 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 transitionProgress = 0f,
                 transitionTargetSong = nextSong,
                 transitionFromSongId = outgoingSong?.id,
+                activeTransitionTool = selectedTool,
                 nextMatchedSong = nextSong,
                 nextMatchedAnalysis = nextAnalysis,
-                activeTempoRatio = 1.0f,
+                activeTempoRatio = inTempoRatio,
                 analyzedTracks = analysisEngine.getAllCached(),
                 savedTransitions = savedTransitions.toMap()
             )
         )
 
         crossfadeJob = scope.launch {
-            // Initialize DJ EQ Transition (incoming starts with High-Pass + 2-Pole Bass Kill)
-            outgoingEq.updateOutgoingEq(0f)
-            incomingEq.updateIncomingEq(0f)
+            // Initialize DJ DSP Engine (EQ + Filter + Echo + In-Processor Tempo Sync)
+            outgoingEq.updateOutgoingEq(0f, selectedTool, 1.0f)
+            incomingEq.updateIncomingEq(0f, selectedTool, inTempoRatio)
 
-            // Start incoming deck at volume 0 and natural 1.0x speed (avoids SonicAudioProcessor buffer stalls)
+            // Keep ExoPlayer PlaybackParameters at DEFAULT (1.0x) so SonicAudioProcessor never stalls;
+            // real-time BPM tempo sync is performed directly inside AutomixEqAudioProcessor!
             outgoingDeck.playbackParameters = PlaybackParameters.DEFAULT
             incomingDeck.playbackParameters = PlaybackParameters.DEFAULT
             incomingDeck.volume = 0f
@@ -821,23 +837,57 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     outgoingDeck.volume = 0f
                 }
 
-                // 1. Update real-time 2-Pole DJ Isolator & Filter Sweep (Bass Swap at t=0.44..0.54 + Exponential LPF Tail)
-                outgoingEq.updateOutgoingEq(t)
-                incomingEq.updateIncomingEq(t)
+                // 1. Smooth In-Processor BPM Tempo Sync Ramping:
+                // Outgoing deck glides from 1.0x -> outTempoRatio during first half;
+                // Incoming deck enters locked at inTempoRatio and glides smoothly to 1.0x natural speed after Bass Swap!
+                val outSpeed = if (t <= 0.50f) {
+                    1.0f + (outTempoRatio - 1.0f) * (t / 0.50f)
+                } else {
+                    outTempoRatio
+                }
+                val inSpeed = if (t <= 0.48f) {
+                    inTempoRatio
+                } else {
+                    val glideFrac = ((t - 0.48f) / 0.48f).coerceIn(0f, 1f)
+                    inTempoRatio + (1.0f - inTempoRatio) * glideFrac
+                }
+                val activeUiTempo = if (t < 0.50f) outSpeed else inSpeed
 
-                // 2. Club DJ Plateau Volume Envelopes:
-                // Both tracks stay loud in the center overlap while separated by EQ frequency bands!
-                val outGain = when {
-                    t < 0.45f -> 1.0f - (t / 0.45f) * 0.12f // Holds 100%..88% while driving the bass
-                    else -> {
-                        val tailFrac = ((t - 0.45f) / 0.55f).coerceIn(0f, 1f)
-                        0.88f * cos(tailFrac * PI * 0.5).toFloat() // Fades out while LPF sweeps 15kHz -> 260Hz
+                // 2. Update real-time DJ DSP (Isolator + LPF/HPF Sweep + Stereo Dub Echo + Tempo Resampler)
+                outgoingEq.updateOutgoingEq(t, selectedTool, outSpeed)
+                incomingEq.updateIncomingEq(t, selectedTool, inSpeed)
+
+                // 3. Tool-Specific DJ Volume Envelopes:
+                val outGain = when (selectedTool) {
+                    AutomixTransitionTool.HIGH_PASS_RISER_SLAM -> when {
+                        t < 0.48f -> 1.0f - (t / 0.48f) * 0.15f
+                        else -> {
+                            val tailFrac = ((t - 0.48f) / 0.52f).coerceIn(0f, 1f)
+                            0.85f * (1f - tailFrac) * (1f - tailFrac) // Fast tension release as Echo tail rings out
+                        }
+                    }
+                    AutomixTransitionTool.SILKY_WARM_ISOLATOR -> cos(t * PI * 0.5).toFloat()
+                    else -> when {
+                        t < 0.45f -> 1.0f - (t / 0.45f) * 0.12f // Holds 100%..88% while driving the bass
+                        else -> {
+                            val tailFrac = ((t - 0.45f) / 0.55f).coerceIn(0f, 1f)
+                            0.88f * cos(tailFrac * PI * 0.5).toFloat() // Fades out while LPF/Echo sweeps
+                        }
                     }
                 }
-                val inGain = when {
-                    t < 0.44f -> sin((t / 0.44f) * PI * 0.5).toFloat() * 0.84f // Rises briskly to 84% (High-Passed)
-                    t < 0.54f -> 0.84f + ((t - 0.44f) / 0.10f) * 0.16f          // Punches to 100% right on Bass Swap!
-                    else -> 1.0f
+
+                val inGain = when (selectedTool) {
+                    AutomixTransitionTool.HIGH_PASS_RISER_SLAM -> when {
+                        t < 0.45f -> (t / 0.45f) * 0.72f
+                        t < 0.52f -> 0.72f + ((t - 0.45f) / 0.07f) * 0.28f // Slam Drop to 100%!
+                        else -> 1.0f
+                    }
+                    AutomixTransitionTool.SILKY_WARM_ISOLATOR -> sin(t * PI * 0.5).toFloat()
+                    else -> when {
+                        t < 0.44f -> sin((t / 0.44f) * PI * 0.5).toFloat() * 0.84f
+                        t < 0.54f -> 0.84f + ((t - 0.44f) / 0.10f) * 0.16f
+                        else -> 1.0f
+                    }
                 }
 
                 if (outgoingDeck.isPlaying) {
@@ -866,11 +916,12 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                             currentAnalysis = nextAnalysis,
                             transitionTargetSong = nextSong,
                             transitionFromSongId = outgoingSong?.id,
+                            activeTransitionTool = selectedTool,
                             nextMatchedSong = upcomingAfterNext,
                             nextMatchedAnalysis = upcomingAfterNextAnalysis,
                             isTransitioning = true,
                             transitionProgress = t,
-                            activeTempoRatio = 1.0f
+                            activeTempoRatio = activeUiTempo
                         )
                     )
                 } else {
@@ -880,7 +931,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                             transitionProgress = t,
                             transitionTargetSong = nextSong,
                             transitionFromSongId = outgoingSong?.id,
-                            activeTempoRatio = 1.0f
+                            activeTransitionTool = selectedTool,
+                            activeTempoRatio = activeUiTempo
                         )
                     )
                 }

@@ -7,7 +7,8 @@ import kotlin.math.roundToInt
 
 /**
  * Selects the best next track "one step ahead" from the remaining unplayed queue
- * based on BPM harmonic proximity (including 0.5x/2x tempo) and energy continuity.
+ * based on BPM harmonic proximity (including 0.5x/2x tempo) and energy continuity,
+ * and automatically selects the optimal DJ transition toolset for each pair.
  */
 object AutomixQueueSelector {
 
@@ -16,8 +17,9 @@ object AutomixQueueSelector {
         val song: Song,
         val analysis: TrackAnalysis,
         val matchScorePercent: Int,
-        val outgoingTempoRatio: Float, // Clamped to [0.96f .. 1.04f]
-        val incomingTempoRatio: Float  // Clamped to [0.96f .. 1.04f]
+        val outgoingTempoRatio: Float, // Clamped to [0.94f .. 1.06f]
+        val incomingTempoRatio: Float, // Clamped to [0.94f .. 1.06f]
+        val transitionTool: AutomixTransitionTool
     )
 
     fun findBestNextTrack(
@@ -57,6 +59,7 @@ object AutomixQueueSelector {
             bpmOut = currentAnalysis.bpm,
             bpmIn = chosenAnalysis.bpm
         )
+        val tool = selectOptimalTransitionTool(currentAnalysis, chosenAnalysis)
 
         return MatchResult(
             candidateIndexInQueue = bestIndex,
@@ -64,7 +67,8 @@ object AutomixQueueSelector {
             analysis = chosenAnalysis,
             matchScorePercent = (finalScore * 100f).roundToInt().coerceIn(60, 99),
             outgoingTempoRatio = outRatio,
-            incomingTempoRatio = inRatio
+            incomingTempoRatio = inRatio,
+            transitionTool = tool
         )
     }
 
@@ -93,6 +97,42 @@ object AutomixQueueSelector {
     }
 
     /**
+     * Automatically selects the best DJ Transition Toolset based on the acoustic relationship
+     * between the outgoing and incoming tracks (BPM delta, 0.5x/2x harmonic ratio, energy lift/drop).
+     */
+    fun selectOptimalTransitionTool(
+        fromAnalysis: TrackAnalysis,
+        toAnalysis: TrackAnalysis
+    ): AutomixTransitionTool {
+        val bpmA = fromAnalysis.bpm
+        val bpmB = toAnalysis.bpm
+        val directDiff = abs(bpmA - bpmB) / bpmA
+        val halfDoubleDiff = min(abs(bpmA - bpmB * 2f), abs(bpmA - bpmB * 0.5f)) / bpmA
+        val energyDelta = toAnalysis.energy - fromAnalysis.energy
+
+        return when {
+            // 1. Half/Double-Time Harmonic Bridge when tracks are near 2x or 0.5x BPM
+            halfDoubleDiff <= 0.06f && directDiff > 0.18f ->
+                AutomixTransitionTool.HALF_DOUBLE_TIME_BRIDGE
+
+            // 2. High-Pass Tension Riser + Echo Slam when jumping up in energy or into a fast banger
+            energyDelta >= 0.12f || (toAnalysis.energy >= 0.76f && bpmB >= 126f) ->
+                AutomixTransitionTool.HIGH_PASS_RISER_SLAM
+
+            // 3. Resonant LPF + Stereo Echo Wash when dropping energy or bridging wider BPM gaps
+            energyDelta <= -0.12f || directDiff > 0.065f ->
+                AutomixTransitionTool.FILTER_ECHO_WASH
+
+            // 4. Warm 3-Band Isolator Morph for chill / slower melodic tracks
+            fromAnalysis.energy < 0.48f && toAnalysis.energy < 0.52f ->
+                AutomixTransitionTool.SILKY_WARM_ISOLATOR
+
+            // 5. Classic Club Bass Swap + Exponential LPF Sweep for matched-tempo grooves
+            else -> AutomixTransitionTool.BASS_SWAP_DROP
+        }
+    }
+
+    /**
      * Builds a SavedTransition descriptor between two consecutive tracks in the queue.
      */
     fun buildSavedTransition(
@@ -104,39 +144,32 @@ object AutomixQueueSelector {
     ): SavedTransition {
         val rawScore = computeCompatibilityScore(fromAnalysis, toAnalysis)
         val scorePct = (rawScore * 100f).roundToInt().coerceIn(62, 99)
-
-        val bpmA = fromAnalysis.bpm
-        val bpmB = toAnalysis.bpm
-        val directDiff = abs(bpmA - bpmB) / bpmA
-        val halfDoubleDiff = min(abs(bpmA - bpmB * 2f), abs(bpmA - bpmB * 0.5f)) / bpmA
-        val energyDelta = toAnalysis.energy - fromAnalysis.energy
-
-        val style = when {
-            directDiff <= 0.025f -> "Tempo-Locked Bass Swap"
-            halfDoubleDiff <= 0.04f && directDiff > 0.15f -> "Half/Double-Time EQ Mix"
-            energyDelta >= 0.15f -> "Energy Lift + Bass Drop"
-            energyDelta <= -0.15f -> "Warm LPF Breakdown Sweep"
-            else -> "DJ Bass Swap + LPF Sweep"
-        }
+        val tool = selectOptimalTransitionTool(fromAnalysis, toAnalysis)
+        val (_, inRatio) = computeTempoSyncRatios(fromAnalysis.bpm, toAnalysis.bpm)
+        val syncPct = ((inRatio - 1.0f) * 100f).roundToInt()
 
         return SavedTransition(
             fromSongId = fromSongId,
             toSongId = toSongId,
-            fromBpm = bpmA,
-            toBpm = bpmB,
+            fromBpm = fromAnalysis.bpm,
+            toBpm = toAnalysis.bpm,
             matchScorePercent = scorePct,
             overlapDurationMs = fromAnalysis.crossfadeDurationMs,
             cueInMs = toAnalysis.cueInMs,
-            transitionStyle = style,
+            transitionTool = tool,
+            transitionStyle = "${tool.shortBadge} (${tool.toolsSummary})",
+            tempoSyncPercent = syncPct,
             isCompleted = isCompleted
         )
     }
 
     /**
-     * Calculates subtle, pitch-preserving playback speed ratios (max ±4%) so two tracks
-     * with close BPMs meet halfway in tempo during the crossfade, then return to 1.0x.
+     * Calculates pitch-preserving playback speed ratios (up to ±6%) so two tracks
+     * lock BPM during the transition, then glide smoothly back to 1.0x.
      */
     fun computeTempoSyncRatios(bpmOut: Float, bpmIn: Float): Pair<Float, Float> {
+        if (bpmOut <= 0f || bpmIn <= 0f) return 1.0f to 1.0f
+
         val candidates = floatArrayOf(bpmIn, bpmIn * 2f, bpmIn * 0.5f)
         var closestEffectiveBpmIn = bpmIn
         var minDelta = Float.MAX_VALUE
@@ -150,15 +183,18 @@ object AutomixQueueSelector {
         }
 
         val relDiff = minDelta / bpmOut
-        // Only apply tempo sync if the tracks are within 6.5% BPM of each other
-        if (relDiff > 0.065f || bpmOut <= 0f || closestEffectiveBpmIn <= 0f) {
-            return 1.0f to 1.0f
+        // If BPMs are within 11%, lock them together (clamped to ±6% max shift per deck)
+        if (relDiff > 0.11f) {
+            // Even for wider BPM differences, apply a gentle ±3% nudge toward each other
+            val nudgeOut = if (closestEffectiveBpmIn > bpmOut) 1.025f else 0.975f
+            val nudgeIn = if (bpmOut > closestEffectiveBpmIn) 1.025f else 0.975f
+            return nudgeOut to nudgeIn
         }
 
-        // Meet halfway at the average BPM, clamped strictly to [0.96f .. 1.04f] (±4%)
-        val targetMidBpm = (bpmOut + closestEffectiveBpmIn) * 0.5f
-        val outRatio = (targetMidBpm / bpmOut).coerceIn(0.96f, 1.04f)
-        val inRatio = (targetMidBpm / closestEffectiveBpmIn).coerceIn(0.96f, 1.04f)
+        // Meet at 60% toward the incoming track's groove, clamped strictly to [0.94f .. 1.06f] (±6%)
+        val targetMidBpm = bpmOut * 0.45f + closestEffectiveBpmIn * 0.55f
+        val outRatio = (targetMidBpm / bpmOut).coerceIn(0.94f, 1.06f)
+        val inRatio = (targetMidBpm / closestEffectiveBpmIn).coerceIn(0.94f, 1.06f)
 
         return outRatio to inRatio
     }

@@ -391,22 +391,30 @@ fun NowPlayingScreen(
 
                         val bannerLabel = if (automixState.isTransitioning && targetTrack != null) {
                             val pct = (automixState.transitionProgress * 100f).roundToInt().coerceIn(1, 100)
+                            val toolBadge = automixState.activeTransitionTool.shortBadge
+                            val tempoDeltaPct = ((automixState.activeTempoRatio - 1.0f) * 100f).roundToInt()
+                            val tempoTag = if (tempoDeltaPct != 0) {
+                                val sign = if (tempoDeltaPct > 0) "+" else ""
+                                " ($sign$tempoDeltaPct%)"
+                            } else ""
+
                             val djStage = when {
-                                automixState.transitionProgress < 0.44f -> "Automix (EQ High-Pass) → ${targetTrack.title}"
-                                automixState.transitionProgress < 0.56f -> "Automix (Bass Swap!) → ${targetTrack.title}"
-                                else -> "Automix (LPF Sweep $pct%)"
+                                automixState.transitionProgress < 0.44f -> "Automix ($toolBadge) → ${targetTrack.title}"
+                                automixState.transitionProgress < 0.55f -> "Automix (Bass Swap!) → ${targetTrack.title}"
+                                else -> "Automix ($toolBadge $pct%)"
                             }
-                            if (bpmText != null && automixState.transitionProgress < 0.56f) {
-                                "$djStage • $bpmText BPM"
-                            } else if (bpmText != null) {
-                                "$djStage • $bpmText BPM"
+                            if (bpmText != null) {
+                                "$djStage • $bpmText BPM$tempoTag"
                             } else {
-                                djStage
+                                "$djStage$tempoTag"
                             }
                         } else {
                             val upcomingTitle = nextTrack?.title ?: ""
+                            val pairKey = if (nextTrack != null) "${song.id}_${nextTrack.id}" else ""
+                            val upcomingTool = automixState.savedTransitions[pairKey]?.transitionTool?.shortBadge
+                            val toolPrefix = if (upcomingTool != null) "Up Next ($upcomingTool) → " else "Up Next → "
                             val suffix = if (bpmText != null) " • $bpmText BPM" else ""
-                            "Up Next → $upcomingTitle$suffix"
+                            "$toolPrefix$upcomingTitle$suffix"
                         }
 
                         Surface(

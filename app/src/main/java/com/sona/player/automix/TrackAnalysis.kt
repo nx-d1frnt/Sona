@@ -3,6 +3,41 @@ package com.sona.player.automix
 import com.sona.player.data.model.Song
 
 /**
+ * Automatically selected DJ transition toolset based on BPM proximity, energy delta, and groove structure.
+ */
+enum class AutomixTransitionTool(
+    val displayName: String,
+    val shortBadge: String,
+    val toolsSummary: String
+) {
+    BASS_SWAP_DROP(
+        displayName = "Club Bass Swap + LPF Sweep",
+        shortBadge = "Bass Swap + LPF",
+        toolsSummary = "BPM Sync • 2-Pole Bass Kill • Exp LPF"
+    ),
+    HIGH_PASS_RISER_SLAM(
+        displayName = "High-Pass Riser + Echo Slam",
+        shortBadge = "HPF Riser → Drop",
+        toolsSummary = "BPM Sync • HPF Build-Up • Dub Echo • Slam Drop"
+    ),
+    FILTER_ECHO_WASH(
+        displayName = "Resonant LPF + Stereo Echo Wash",
+        shortBadge = "LPF + Echo Wash",
+        toolsSummary = "BPM Sync • Ping-Pong Echo Tail • Deep LPF"
+    ),
+    HALF_DOUBLE_TIME_BRIDGE(
+        displayName = "Half/Double-Time Harmonic Bridge",
+        shortBadge = "2x/0.5x Tempo Bridge",
+        toolsSummary = "2x/0.5x BPM Lock • Mid Isolator • Echo"
+    ),
+    SILKY_WARM_ISOLATOR(
+        displayName = "Warm 3-Band Isolator Morph",
+        shortBadge = "3-Band Isolator",
+        toolsSummary = "BPM Sync • Smooth 3-Band EQ Morph"
+    )
+}
+
+/**
  * Acoustic & structural metadata extracted for a local track to power Sona's Automix.
  */
 data class TrackAnalysis(
@@ -36,7 +71,9 @@ data class SavedTransition(
     val matchScorePercent: Int,
     val overlapDurationMs: Long,
     val cueInMs: Long,
-    val transitionStyle: String,     // e.g., "Bass Swap + LPF", "Harmonic Lock", "Double-Time EQ", "Energy Lift"
+    val transitionTool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP,
+    val transitionStyle: String = transitionTool.displayName,
+    val tempoSyncPercent: Int = 0,   // e.g. +3 or -2 (%) BPM sync applied during transition
     val isCompleted: Boolean = false
 ) {
     companion object {
@@ -55,10 +92,11 @@ data class AutomixTransitionState(
     val nextMatchedAnalysis: TrackAnalysis? = null,
     val transitionTargetSong: Song? = null, // Track being mixed into during an active transition
     val transitionFromSongId: Long? = null, // Outgoing track ID during an active transition
+    val activeTransitionTool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP,
     val matchScorePercent: Int = 0,
     val isTransitioning: Boolean = false,
     val transitionProgress: Float = 0f,     // 0.0f (start of mix) .. 1.0f (mix completed)
-    val activeTempoRatio: Float = 1.0f,     // Current pitch-preserving speed adjustment
+    val activeTempoRatio: Float = 1.0f,     // Current pitch-preserving speed adjustment (e.g. 1.03f)
     val analyzedTracks: Map<Long, TrackAnalysis> = emptyMap(),
     val savedTransitions: Map<String, SavedTransition> = emptyMap()
 )
