@@ -1,7 +1,19 @@
 package com.sona.player.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,15 +25,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
@@ -33,10 +51,12 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,10 +65,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -215,37 +237,82 @@ fun NowPlayingScreen(
             // Пространство для открытого просмотра полноэкранной обложки
             Spacer(modifier = Modifier.weight(1f))
 
-            // Блок информации о треке и элементы управления
+            // Блок информации о треке и кнопки действий (как в референсе: название слева, share/favorite справа)
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp)
             ) {
-                Text(
-                    text = song.title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                var isFavorite by remember { mutableStateOf(false) }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = song.title,
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
 
-                Text(
-                    text = "${song.artist} • ${song.album}",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White.copy(alpha = 0.75f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                        Spacer(modifier = Modifier.height(2.dp))
 
-                Spacer(modifier = Modifier.height(24.dp))
+                        Text(
+                            text = "${song.artist} • ${song.album}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White.copy(alpha = 0.70f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
 
-                // Слайдер прогресса
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    // Expressive action pills (Share & Like)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            IconButton(onClick = { /* Share */ }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Share,
+                                    contentDescription = "Share",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isFavorite) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            IconButton(onClick = { isFavorite = !isFavorite }) {
+                                Icon(
+                                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                    contentDescription = "Favorite",
+                                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Expressive толстый скругленный прогресс-бар в стиле Material 3
                 Slider(
                     value = progress,
                     onValueChange = { isUserSeeking = it },
@@ -257,7 +324,7 @@ fun NowPlayingScreen(
                     colors = SliderDefaults.colors(
                         thumbColor = MaterialTheme.colorScheme.primary,
                         activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                        inactiveTrackColor = Color.White.copy(alpha = 0.22f)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -276,18 +343,110 @@ fun NowPlayingScreen(
                     Text(
                         text = formatTime(currentDisplayMs),
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.7f)
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White.copy(alpha = 0.65f)
                     )
                     Text(
                         text = formatTime(durationMs),
                         style = MaterialTheme.typography.labelMedium,
-                        color = Color.White.copy(alpha = 0.7f)
+                        fontWeight = FontWeight.Medium,
+                        color = Color.White.copy(alpha = 0.65f)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
-                // Кнопки управления воспроизведением
+                // Главный ряд управления: Крупная пилюля Play/Pause (M3 Expressive Pill) + круглые кнопки Skip
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Previous Button with expressive dark glass container
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.12f),
+                        modifier = Modifier.size(60.dp)
+                    ) {
+                        IconButton(
+                            onClick = onPreviousClick,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipPrevious,
+                                contentDescription = "Previous",
+                                tint = Color.White,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    }
+
+                    // Expressive Hero Pill Button (Play / Pause)
+                    val playPillWidth by animateDpAsState(
+                        targetValue = if (isPlaying) 180.dp else 195.dp,
+                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                        label = "PlayPillWidth"
+                    )
+
+                    Surface(
+                        onClick = onPlayPauseClick,
+                        shape = RoundedCornerShape(32.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        shadowElevation = 10.dp,
+                        modifier = Modifier
+                            .height(68.dp)
+                            .width(playPillWidth)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            AnimatedContent(
+                                targetState = isPlaying,
+                                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                                label = "PlayIconTransition"
+                            ) { playing ->
+                                Icon(
+                                    imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (playing) "Pause" else "Play",
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(34.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = if (isPlaying) "Pause" else "Play",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
+                    }
+
+                    // Next Button with expressive dark glass container
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.12f),
+                        modifier = Modifier.size(60.dp)
+                    ) {
+                        IconButton(
+                            onClick = onNextClick,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.SkipNext,
+                                contentDescription = "Next",
+                                tint = Color.White,
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Дополнительный нижний ряд Material 3 Expressive (Shuffle, Repeat, Queue, More)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
@@ -297,47 +456,8 @@ fun NowPlayingScreen(
                         Icon(
                             imageVector = Icons.Rounded.Shuffle,
                             contentDescription = "Shuffle",
-                            tint = if (isShuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onPreviousClick,
-                        modifier = Modifier.size(54.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.SkipPrevious,
-                            contentDescription = "Previous",
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-
-                    FilledIconButton(
-                        onClick = onPlayPauseClick,
-                        modifier = Modifier.size(72.dp),
-                        shape = CircleShape,
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            modifier = Modifier.size(40.dp)
-                        )
-                    }
-
-                    IconButton(
-                        onClick = onNextClick,
-                        modifier = Modifier.size(54.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.SkipNext,
-                            contentDescription = "Next",
-                            tint = Color.White,
-                            modifier = Modifier.size(36.dp)
+                            tint = if (isShuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(24.dp)
                         )
                     }
 
@@ -345,12 +465,31 @@ fun NowPlayingScreen(
                         val (icon, tint) = when (repeatMode) {
                             Player.REPEAT_MODE_ONE -> Icons.Rounded.RepeatOne to MaterialTheme.colorScheme.primary
                             Player.REPEAT_MODE_ALL -> Icons.Rounded.Repeat to MaterialTheme.colorScheme.primary
-                            else -> Icons.Rounded.Repeat to Color.White.copy(alpha = 0.7f)
+                            else -> Icons.Rounded.Repeat to Color.White.copy(alpha = 0.5f)
                         }
                         Icon(
                             imageVector = icon,
                             contentDescription = "Repeat",
-                            tint = tint
+                            tint = tint,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    IconButton(onClick = { /* Queue bottom sheet */ }) {
+                        Icon(
+                            imageVector = Icons.Rounded.QueueMusic,
+                            contentDescription = "Queue",
+                            tint = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    IconButton(onClick = { /* More options */ }) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "More",
+                            tint = Color.White.copy(alpha = 0.5f),
+                            modifier = Modifier.size(24.dp)
                         )
                     }
                 }
