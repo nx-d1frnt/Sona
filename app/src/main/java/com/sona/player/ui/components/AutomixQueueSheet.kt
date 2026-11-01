@@ -97,7 +97,7 @@ fun AutomixQueueSheet(
     ) {
         Surface(
             shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
-            color = palette.dominantBackground,
+            color = palette.surfaceContainerTint,
             tonalElevation = 12.dp,
             modifier = Modifier
                 .fillMaxWidth()
