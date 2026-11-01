@@ -1,13 +1,11 @@
 package com.sona.player.automix
 
 import com.sona.player.data.model.Song
-import kotlin.math.abs
-import kotlin.math.min
 
 /**
  * Automix operating mode:
- * - [AUTO_DJ]: Prefers the musical outro; early mixing is reserved for long tracks with
- *   a measured, sustained breakdown and a compatible next track.
+ * - [AUTO_DJ]: Uses measured vocal pauses in middle sections, preferring structural boundaries
+ *   and otherwise selecting a measured beat in a steady groove.
  * - [CLASSIC_OUTRO]: Mixes in the musical outro phrase (last 12..18s of the track).
  * - [QUICK_MID_MIX]: Club Megamix / DJ Set mode — finds the post-chorus breakdown past the middle
  *   of the track (50%..67%) and transitions early for a fast-paced continuous mix.
@@ -113,44 +111,44 @@ data class TrackAnalysis(
     fun resolveEffectiveMode(mode: AutomixMode, nextAnalysis: TrackAnalysis? = null): AutomixMode {
         if (mode != AutomixMode.AUTO_DJ) return mode
 
-        // AUTO is a listening mode: BPM/energy similarity alone cannot justify cutting a song.
-        // Unknown/legacy/fallback analysis carries no structural confidence and uses the outro.
         val next = nextAnalysis ?: return AutomixMode.CLASSIC_OUTRO
-        if (durationMs < 180_000L || !midMixConfidence.isFinite() || midMixConfidence < 0.60f) {
-            return AutomixMode.CLASSIC_OUTRO
-        }
-        val earliestMidMs = maxOf(90_000L, (durationMs * 0.52).toLong())
-        if (midMixOutMs < earliestMidMs || midMixOutMs > (durationMs * 0.67).toLong() ||
-            mixOutMs - midMixOutMs < 25_000L
+        if (durationMs < 150_000L || !bpm.isFinite() || !next.bpm.isFinite() ||
+            bpm <= 0f || next.bpm <= 0f || !energy.isFinite() || !next.energy.isFinite()
         ) return AutomixMode.CLASSIC_OUTRO
 
-        if (!bpm.isFinite() || !next.bpm.isFinite() || bpm <= 0f || next.bpm <= 0f ||
-            !energy.isFinite() || !next.energy.isFinite() ||
-            energy < 0.40f || next.energy < 0.40f || abs(energy - next.energy) > 0.30f
-        ) return AutomixMode.CLASSIC_OUTRO
-
-        // A breakdown with continuing vocals is not a safe place for an automatic early exit.
-        if (autoMidCue() == null) return AutomixMode.CLASSIC_OUTRO
-
-        val directDiff = abs(bpm - next.bpm)
-        val halfDiff = abs(bpm - next.bpm * 0.5f)
-        val doubleDiff = abs(bpm - next.bpm * 2.0f)
-        val relativeBpmDiff = min(directDiff, min(halfDiff, doubleDiff)) / bpm
-        return if (relativeBpmDiff <= 0.18f) {
-            AutomixMode.QUICK_MID_MIX
-        } else {
-            AutomixMode.CLASSIC_OUTRO
-        }
+        // A tempo/energy difference changes the transition technique, not whether AUTO
+        // is allowed to use a measured middle section.
+        return if (autoMidCue() != null) AutomixMode.QUICK_MID_MIX else AutomixMode.CLASSIC_OUTRO
     }
 
-    // The detector leads the energy boundary by a bar. Look through that boundary
-    // for a short measured vocal pause, rather than requiring an entire overlap to be silent.
-    internal fun autoMidCue(): Long? = (midMixOutMs..midMixOutMs + 6000L step 500L)
-        .firstOrNull { cue ->
-            cue <= (durationMs * 0.67).toLong() && mixOutMs - cue >= 25_000L &&
-                (MusicalCueSelector.vocalRisk(this, cue, cue + 1000L) ?: 1f) < 0.25f &&
+    // Immutable analysis: compute this once, not on every playback-progress tick.
+    private val automaticMidCue: Long? by lazy { findAutoMidCue() }
+    internal fun autoMidCue(): Long? = automaticMidCue
+
+    private fun findAutoMidCue(): Long? {
+        if (durationMs < 150_000L) return null
+        val lower = maxOf(90_000L, (durationMs * 0.52).toLong())
+        val upper = minOf((durationMs * 0.70).toLong(), mixOutMs - 25_000L,
+            durationMs - 15_000L)
+        if (upper < lower) return null
+        fun vocalPause(cue: Long): Boolean =
+            (MusicalCueSelector.vocalRisk(this, cue, cue + 1000L) ?: 1f) < 0.25f &&
                 (MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) ?: 1f) < 0.35f
+
+        // Prefer the detected structural boundary when it exists.
+        if (midMixConfidence.isFinite() && midMixConfidence >= 0.60f && midMixOutMs in lower..upper) {
+            (midMixOutMs..minOf(midMixOutMs + 8000L, upper) step 500L)
+                .firstOrNull { vocalPause(it) }?.let { return it }
         }
+
+        // A steady groove need not have a large energy drop. A measured beat in a
+        // vocal pause is enough for a DJ exit; never extrapolate unmeasured rhythm.
+        return beatSections.asSequence()
+            .filter { it.confidence >= 0.45f && it.bpm.isFinite() && it.bpm > 0f && it.beatsMs.size >= 6 }
+            .flatMap { section -> section.beatsMs.asSequence().filter { it in section.startMs..section.endMs } }
+            .filter { it in lower..upper && vocalPause(it) }
+            .minByOrNull { kotlin.math.abs(it - (durationMs * 0.60).toLong()) }
+    }
 
     /**
      * Returns the optimal entry point (Cue-In) in milliseconds for the incoming track,
@@ -194,9 +192,9 @@ data class TrackAnalysis(
     fun effectiveZoneFraction(mode: AutomixMode, nextAnalysis: TrackAnalysis? = null): Float {
         val resolvedMode = resolveEffectiveMode(mode, nextAnalysis)
         if (durationMs <= 0L) return if (resolvedMode == AutomixMode.QUICK_MID_MIX) 0.56f else 0.82f
-        val targetMs = effectiveMixOutMs(resolvedMode, nextAnalysis)
+        val targetMs = effectiveMixOutMs(mode, nextAnalysis)
         return if (resolvedMode == AutomixMode.QUICK_MID_MIX) {
-            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.50f, 0.68f)
+            (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.50f, 0.70f)
         } else {
             (targetMs.toFloat() / durationMs.toFloat()).coerceIn(0.68f, 0.92f)
         }

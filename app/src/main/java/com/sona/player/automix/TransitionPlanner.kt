@@ -117,13 +117,17 @@ internal object TransitionPlanner {
         val lower = maxOf(base - 6000L, if (early) maxOf(90_000L, (from.durationMs * 0.52).toLong())
             else (from.durationMs * 0.70).toLong())
         val upper = minOf(base + 6000L, from.durationMs - overlap - 500L,
-            if (early) (from.durationMs * 0.67).toLong() else from.durationMs)
+            if (early) (from.durationMs * 0.70).toLong() else from.durationMs)
         if (upper < lower) return base
         fun score(position: Long): Float {
             val voice = MusicalCueSelector.vocalRisk(from, position, position + 3000L) ?: return Float.POSITIVE_INFINITY
             return voice * incomingVoice + abs(position - base) / 6000f * 0.12f
         }
-        val candidates = (lower..upper step 500L).toList() + base
+        val candidates = ((lower..upper step 500L).toList() + base).filter { cue ->
+            !early || mode != AutomixMode.AUTO_DJ ||
+                ((MusicalCueSelector.vocalRisk(from, cue, cue + 1000L) ?: 1f) < 0.25f &&
+                    (MusicalCueSelector.vocalRisk(from, cue, cue + 3000L) ?: 1f) < 0.35f)
+        }
         val best = candidates.minByOrNull { score(it) } ?: base
         return if (score(best) < score(base)) best else base
     }
