@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -80,6 +81,7 @@ import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import com.sona.player.data.model.Song
+import com.sona.player.ui.theme.rememberArtworkPalette
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +102,9 @@ fun NowPlayingScreen(
     modifier: Modifier = Modifier
 ) {
     if (song == null) return
+
+    // Динамическое извлечение цветов прямо из обложки текущего трека (Вариант 4)
+    val palette = rememberArtworkPalette(song.albumArtUri)
 
     var isUserSeeking by remember { mutableFloatStateOf(-1f) }
     val progress = if (isUserSeeking >= 0f) {
@@ -273,14 +278,14 @@ fun NowPlayingScreen(
 
                     Spacer(modifier = Modifier.width(12.dp))
 
-                    // Expressive action pills (Share & Like)
+                    // Expressive action pills (Share & Like) с динамическими цветами от обложки
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Surface(
                             shape = CircleShape,
-                            color = Color.White.copy(alpha = 0.12f),
+                            color = Color.White.copy(alpha = 0.14f),
                             modifier = Modifier.size(44.dp)
                         ) {
                             IconButton(onClick = { /* Share */ }) {
@@ -293,16 +298,25 @@ fun NowPlayingScreen(
                             }
                         }
 
+                        val favoriteBgColor by animateColorAsState(
+                            targetValue = if (isFavorite) palette.primaryAccent else Color.White.copy(alpha = 0.14f),
+                            label = "FavoriteBg"
+                        )
+                        val favoriteIconColor by animateColorAsState(
+                            targetValue = if (isFavorite) palette.onPrimaryAccent else Color.White,
+                            label = "FavoriteIcon"
+                        )
+
                         Surface(
-                            shape = CircleShape,
-                            color = if (isFavorite) MaterialTheme.colorScheme.primaryContainer else Color.White.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(16.dp),
+                            color = favoriteBgColor,
                             modifier = Modifier.size(44.dp)
                         ) {
                             IconButton(onClick = { isFavorite = !isFavorite }) {
                                 Icon(
                                     imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                                     contentDescription = "Favorite",
-                                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else Color.White,
+                                    tint = favoriteIconColor,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -312,20 +326,20 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Expressive толстый скругленный прогресс-бар в стиле Material 3
-                Slider(
-                    value = progress,
+                // Вариант 2: Фирменный волновой прогресс-бар Sona с подсветкой зоны Automix
+                ExpressiveWaveSlider(
+                    progress = progress,
+                    isPlaying = isPlaying,
+                    primaryColor = palette.primaryAccent,
+                    automixAccentColor = palette.secondaryAccent,
                     onValueChange = { isUserSeeking = it },
                     onValueChangeFinished = {
-                        val newPosition = (isUserSeeking * durationMs).toLong()
-                        onSeek(newPosition)
-                        isUserSeeking = -1f
+                        if (isUserSeeking >= 0f) {
+                            val newPosition = (isUserSeeking * durationMs).toLong()
+                            onSeek(newPosition)
+                            isUserSeeking = -1f
+                        }
                     },
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.22f)
-                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -333,7 +347,8 @@ fun NowPlayingScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     val currentDisplayMs = if (isUserSeeking >= 0f) {
                         (isUserSeeking * durationMs).toLong()
@@ -346,6 +361,38 @@ fun NowPlayingScreen(
                         fontWeight = FontWeight.Medium,
                         color = Color.White.copy(alpha = 0.65f)
                     )
+
+                    // Индикатор зоны Automix при приближении к концу трека
+                    val isInAutomixZone = progress >= 0.85f
+                    AnimatedContent(
+                        targetState = isInAutomixZone,
+                        transitionSpec = { fadeIn() togetherWith fadeOut() },
+                        label = "AutomixBadge"
+                    ) { inZone ->
+                        if (inZone) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = palette.secondaryAccent,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = "AUTOMIX ZONE",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.sp,
+                                    color = palette.secondaryAccent
+                                )
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.height(14.dp))
+                        }
+                    }
+
                     Text(
                         text = formatTime(durationMs),
                         style = MaterialTheme.typography.labelMedium,
@@ -356,7 +403,7 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Главный ряд управления: Крупная пилюля Play/Pause (M3 Expressive Pill) + круглые кнопки Skip
+                // Главный ряд управления: Крупная пилюля Play/Pause с динамическим цветом обложки + морфинг
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -381,18 +428,26 @@ fun NowPlayingScreen(
                         }
                     }
 
-                    // Expressive Hero Pill Button (Play / Pause)
+                    // Expressive Hero Pill Button (Play / Pause) — динамический цвет и морфинг углов
                     val playPillWidth by animateDpAsState(
-                        targetValue = if (isPlaying) 180.dp else 195.dp,
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                        targetValue = if (isPlaying) 176.dp else 196.dp,
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessMediumLow
+                        ),
                         label = "PlayPillWidth"
+                    )
+                    val playPillCorner by animateDpAsState(
+                        targetValue = if (isPlaying) 24.dp else 34.dp,
+                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                        label = "PlayPillCorner"
                     )
 
                     Surface(
                         onClick = onPlayPauseClick,
-                        shape = RoundedCornerShape(32.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        shadowElevation = 10.dp,
+                        shape = RoundedCornerShape(playPillCorner),
+                        color = palette.primaryAccent,
+                        shadowElevation = 12.dp,
                         modifier = Modifier
                             .height(68.dp)
                             .width(playPillWidth)
@@ -410,16 +465,16 @@ fun NowPlayingScreen(
                                 Icon(
                                     imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                                     contentDescription = if (playing) "Pause" else "Play",
-                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    tint = palette.onPrimaryAccent,
                                     modifier = Modifier.size(34.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.width(10.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = if (isPlaying) "Pause" else "Play",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimary
+                                color = palette.onPrimaryAccent
                             )
                         }
                     }
@@ -446,51 +501,108 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Дополнительный нижний ряд Material 3 Expressive (Shuffle, Repeat, Queue, More)
+                // Дополнительный нижний ряд Material 3 Expressive в виде капсул (как на референсе)
+                var isAutomixEnabled by remember { mutableStateOf(true) }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onShuffleClick) {
-                        Icon(
-                            imageVector = Icons.Rounded.Shuffle,
-                            contentDescription = "Shuffle",
-                            tint = if (isShuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.5f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    IconButton(onClick = onRepeatClick) {
-                        val (icon, tint) = when (repeatMode) {
-                            Player.REPEAT_MODE_ONE -> Icons.Rounded.RepeatOne to MaterialTheme.colorScheme.primary
-                            Player.REPEAT_MODE_ALL -> Icons.Rounded.Repeat to MaterialTheme.colorScheme.primary
-                            else -> Icons.Rounded.Repeat to Color.White.copy(alpha = 0.5f)
+                    // Группа режимов слева (Queue, Automix, Shuffle, Repeat)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Queue pill
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                        ) {
+                            IconButton(onClick = { /* Queue */ }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.QueueMusic,
+                                    contentDescription = "Queue",
+                                    tint = Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = "Repeat",
-                            tint = tint,
-                            modifier = Modifier.size(24.dp)
+
+                        // Automix Expressive Toggle Pill
+                        val automixBg by animateColorAsState(
+                            targetValue = if (isAutomixEnabled) palette.secondaryAccent.copy(alpha = 0.24f) else Color.White.copy(alpha = 0.12f),
+                            label = "AutomixBg"
                         )
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = automixBg,
+                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                        ) {
+                            IconButton(onClick = { isAutomixEnabled = !isAutomixEnabled }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = "Automix",
+                                    tint = if (isAutomixEnabled) palette.secondaryAccent else Color.White.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        // Shuffle pill
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isShuffle) palette.primaryAccent.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                        ) {
+                            IconButton(onClick = onShuffleClick) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Shuffle,
+                                    contentDescription = "Shuffle",
+                                    tint = if (isShuffle) palette.primaryAccent else Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        // Repeat pill
+                        val isRepeatActive = repeatMode != Player.REPEAT_MODE_OFF
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = if (isRepeatActive) palette.primaryAccent.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.12f),
+                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                        ) {
+                            IconButton(onClick = onRepeatClick) {
+                                val icon = if (repeatMode == Player.REPEAT_MODE_ONE) {
+                                    Icons.Rounded.RepeatOne
+                                } else {
+                                    Icons.Rounded.Repeat
+                                }
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = "Repeat",
+                                    tint = if (isRepeatActive) palette.primaryAccent else Color.White.copy(alpha = 0.85f),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
 
-                    IconButton(onClick = { /* Queue bottom sheet */ }) {
-                        Icon(
-                            imageVector = Icons.Rounded.QueueMusic,
-                            contentDescription = "Queue",
-                            tint = Color.White.copy(alpha = 0.5f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-
-                    IconButton(onClick = { /* More options */ }) {
-                        Icon(
-                            imageVector = Icons.Rounded.MoreVert,
-                            contentDescription = "More",
-                            tint = Color.White.copy(alpha = 0.5f),
-                            modifier = Modifier.size(24.dp)
-                        )
+                    // Кнопка меню (More) справа
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.12f),
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        IconButton(onClick = { /* More options */ }) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "More",
+                                tint = Color.White.copy(alpha = 0.85f),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
