@@ -1,5 +1,6 @@
 package com.sona.player.ui.components
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -127,10 +128,17 @@ fun NowPlayingScreen(
         1.0f
     }
 
+    BackHandler(onBack = onDismiss)
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(Color.Black)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = { /* Consume touches so taps on cover art don't pass through to SongList/MiniPlayer */ }
+            )
     ) {
         // 1. Четкая полноэкранная обложка с плавным растворением (Crossfade) в пике Automix-перехода
         Crossfade(
@@ -385,7 +393,7 @@ fun NowPlayingScreen(
                                     modifier = Modifier.size(15.dp)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                val prefix = if (automixState.isTransitioning) "Automixing → " else "Up Next → "
+                                val prefix = if (automixState.isTransitioning) "Automixing (EQ) → " else "Up Next → "
                                 val suffix = if (bpmText != null) " • $bpmText BPM" else ""
                                 Text(
                                     text = "$prefix${nextTrack.title}$suffix",
@@ -409,13 +417,13 @@ fun NowPlayingScreen(
                     primaryColor = palette.primaryAccent,
                     automixAccentColor = palette.secondaryAccent,
                     automixZoneStartFraction = automixZoneFraction,
-                    onValueChange = { isUserSeeking = it },
-                    onValueChangeFinished = {
-                        if (isUserSeeking >= 0f) {
-                            val newPosition = (isUserSeeking * durationMs).toLong()
-                            onSeek(newPosition)
-                            isUserSeeking = -1f
-                        }
+                    onValueChange = { fraction ->
+                        isUserSeeking = fraction
+                    },
+                    onValueChangeFinished = { finalFraction ->
+                        val newPosition = (finalFraction.coerceIn(0f, 1f) * durationMs).toLong()
+                        onSeek(newPosition)
+                        isUserSeeking = -1f
                     },
                     modifier = Modifier.fillMaxWidth()
                 )

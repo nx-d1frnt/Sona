@@ -10,8 +10,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +21,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,12 +45,15 @@ fun ExpressiveWaveSlider(
     primaryColor: Color,
     automixAccentColor: Color,
     onValueChange: (Float) -> Unit,
-    onValueChangeFinished: () -> Unit,
+    onValueChangeFinished: (Float) -> Unit,
     modifier: Modifier = Modifier,
     automixZoneStartFraction: Float = 0.85f
 ) {
     var isDragging by remember { mutableStateOf(false) }
     var dragProgress by remember { mutableFloatStateOf(progress) }
+
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnValueChangeFinished by rememberUpdatedState(onValueChangeFinished)
 
     val activeProgress = if (isDragging) dragProgress else progress.coerceIn(0f, 1f)
 
@@ -93,43 +97,34 @@ fun ExpressiveWaveSlider(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(40.dp)
+            .height(44.dp)
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onPress = { offset ->
-                        isDragging = true
-                        val newFraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        dragProgress = newFraction
-                        onValueChange(newFraction)
-                        tryAwaitRelease()
-                        isDragging = false
-                        onValueChangeFinished()
-                    }
-                )
-            }
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        isDragging = true
-                        val newFraction = (offset.x / size.width).coerceIn(0f, 1f)
-                        dragProgress = newFraction
-                        onValueChange(newFraction)
-                    },
-                    onDragEnd = {
-                        isDragging = false
-                        onValueChangeFinished()
-                    },
-                    onDragCancel = {
-                        isDragging = false
-                        onValueChangeFinished()
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        change.consume()
-                        val newFraction = (change.position.x / size.width).coerceIn(0f, 1f)
-                        dragProgress = newFraction
-                        onValueChange(newFraction)
-                    }
-                )
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+
+                    val widthPx = size.width.toFloat().coerceAtLeast(1f)
+                    var latestFraction = (down.position.x / widthPx).coerceIn(0f, 1f)
+
+                    isDragging = true
+                    dragProgress = latestFraction
+                    currentOnValueChange(latestFraction)
+
+                    do {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id }
+                            ?: event.changes.firstOrNull()
+                        if (change != null && change.pressed) {
+                            latestFraction = (change.position.x / widthPx).coerceIn(0f, 1f)
+                            dragProgress = latestFraction
+                            currentOnValueChange(latestFraction)
+                            change.consume()
+                        }
+                    } while (event.changes.any { it.pressed })
+
+                    isDragging = false
+                    currentOnValueChangeFinished(latestFraction)
+                }
             },
         contentAlignment = Alignment.Center
     ) {
@@ -163,7 +158,7 @@ fun ExpressiveWaveSlider(
                 }
 
                 // Automix Zone segment at the end of the track
-                if (automixStartX < width) {
+                if (automixStartX < width && automixZoneStartFraction < 0.99f) {
                     drawLine(
                         brush = Brush.horizontalGradient(
                             colors = listOf(

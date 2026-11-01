@@ -4,15 +4,21 @@ import android.content.Context
 import android.media.AudioAttributes as FrameworkAudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaSession
 import com.sona.player.automix.AudioAnalysisEngine
+import com.sona.player.automix.AutomixEqAudioProcessor
 import com.sona.player.automix.AutomixQueueSelector
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.automix.TrackAnalysis
@@ -61,16 +67,38 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         .setUsage(C.USAGE_MEDIA)
         .build()
 
-    // Two ExoPlayer decks with handleAudioFocus = false; unified AudioFocus is managed below
-    private val deckA: ExoPlayer = ExoPlayer.Builder(context)
-        .setAudioAttributes(media3AudioAttrs, false)
-        .setHandleAudioBecomingNoisy(true)
-        .build()
+    // Dedicated real-time Biquad DJ EQ processors for each deck
+    private val eqProcessorA = AutomixEqAudioProcessor()
+    private val eqProcessorB = AutomixEqAudioProcessor()
 
-    private val deckB: ExoPlayer = ExoPlayer.Builder(context)
-        .setAudioAttributes(media3AudioAttrs, false)
-        .setHandleAudioBecomingNoisy(true)
-        .build()
+    // Two ExoPlayer decks with custom EQ AudioProcessor and unified AudioFocus management
+    private val deckA: ExoPlayer = buildDeckWithEq(context, eqProcessorA)
+    private val deckB: ExoPlayer = buildDeckWithEq(context, eqProcessorB)
+
+    @OptIn(UnstableApi::class)
+    private fun buildDeckWithEq(context: Context, eqProcessor: AutomixEqAudioProcessor): ExoPlayer {
+        val renderersFactory = object : DefaultRenderersFactory(context) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink {
+                return DefaultAudioSink.Builder(context)
+                    .setAudioProcessors(arrayOf(eqProcessor))
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build()
+            }
+        }
+        return ExoPlayer.Builder(context, renderersFactory)
+            .setAudioAttributes(media3AudioAttrs, false)
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+    }
+
+    private fun getEqForDeck(deck: ExoPlayer): AutomixEqAudioProcessor {
+        return if (deck === deckA) eqProcessorA else eqProcessorB
+    }
 
     var activeDeck: ExoPlayer = deckA
         private set
@@ -90,6 +118,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     private var currentMatchResult: AutomixQueueSelector.MatchResult? = null
     private var duckMultiplier: Float = 1.0f
     private var hasAudioFocus: Boolean = false
+    private var lastManualSeekTimeMs: Long = 0L
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
         when (focusChange) {
@@ -264,6 +293,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     }
 
     fun seekTo(positionMs: Long) {
+        lastManualSeekTimeMs = System.currentTimeMillis()
         if (crossfadeJob?.isActive == true) {
             cancelActiveCrossfade()
         }
@@ -443,6 +473,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         if (!automix.isEnabled || !state.isPlaying || crossfadeJob?.isActive == true) return
         if (activeDeck.repeatMode == Player.REPEAT_MODE_ONE) return
 
+        // Give the user a 2.5s grace period after a manual seek before triggering Automix
+        if (System.currentTimeMillis() - lastManualSeekTimeMs < 2500L) return
+
         val nextIndex = state.currentIndex + 1
         val nextSong = playlist.getOrNull(nextIndex) ?: return
 
@@ -457,8 +490,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             prebufferInactiveDeck(nextIndex)
         }
 
-        // 2. Trigger the Equal-Power Crossfade + Tempo Sync when entering the Automix Zone
-        if (positionMs >= mixOutMs && positionMs < durationMs - 1500L) {
+        // 2. Trigger the Equal-Power Crossfade + DJ EQ Transition + Tempo Sync when entering the Automix Zone
+        if (positionMs >= mixOutMs && positionMs < durationMs - 2500L) {
             startCrossfadeTransition(nextIndex, nextSong)
         }
     }
@@ -473,6 +506,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         inactiveDeck.pause()
         inactiveDeck.volume = 0f
         inactiveDeck.playbackParameters = PlaybackParameters.DEFAULT
+        getEqForDeck(inactiveDeck).resetEq()
         inactiveDeck.setMediaItems(items, nextIndex, cueInMs)
         inactiveDeck.prepare()
         isPrebufferedForIndex = nextIndex
@@ -487,6 +521,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         val outgoingDeck = activeDeck
         val incomingDeck = inactiveDeck
+        val outgoingEq = getEqForDeck(outgoingDeck)
+        val incomingEq = getEqForDeck(incomingDeck)
 
         val curAnalysis = _playerState.value.automix.currentAnalysis
         val nextAnalysis = analysisEngine.getCached(nextSong.id)
@@ -501,6 +537,10 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         }
 
         crossfadeJob = scope.launch {
+            // Initialize DJ EQ Transition (incoming starts with High-Pass Bass Cut)
+            outgoingEq.updateOutgoingEq(0f)
+            incomingEq.updateIncomingEq(0f)
+
             // Start incoming deck at volume 0 with pitch-preserving tempo sync
             incomingDeck.volume = 0f
             incomingDeck.playbackParameters = PlaybackParameters(inTempoRatio, 1.0f)
@@ -514,14 +554,18 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 if (!isActive) break
                 val t = (step.toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
 
-                // Equal-Power Crossfade curves: cos(t * PI/2) and sin(t * PI/2)
+                // 1. Update real-time DJ Biquad EQ Filters (Bass Swap at t=0.45..0.58 + Low-Pass Tail)
+                outgoingEq.updateOutgoingEq(t)
+                incomingEq.updateIncomingEq(t)
+
+                // 2. Equal-Power Crossfade curves: cos(t * PI/2) and sin(t * PI/2)
                 val outGain = cos(t * PI * 0.5).toFloat()
                 val inGain = sin(t * PI * 0.5).toFloat()
 
                 outgoingDeck.volume = (outGain * duckMultiplier).coerceIn(0f, 1f)
                 incomingDeck.volume = (inGain * duckMultiplier).coerceIn(0f, 1f)
 
-                // Smooth pitch-preserving tempo sync (±4% max)
+                // 3. Smooth pitch-preserving tempo sync (±4% max)
                 val currentDisplayTempo: Float
                 if (t <= 0.5f) {
                     val frac = t / 0.5f
@@ -577,10 +621,12 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 mediaSession?.player = activeDeck
             }
 
-            // Stop and reset the old outgoing deck
+            // Stop and reset the old outgoing deck & both EQ processors
             outgoingDeck.pause()
             outgoingDeck.volume = 1.0f * duckMultiplier
             outgoingDeck.playbackParameters = PlaybackParameters.DEFAULT
+            outgoingEq.resetEq()
+            incomingEq.resetEq()
 
             // Restore incoming (now active) deck to 100% volume and 1.0x natural speed
             activeDeck.volume = 1.0f * duckMultiplier
@@ -606,6 +652,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     private fun completeCrossfadeImmediately() {
         crossfadeJob?.cancel()
         crossfadeJob = null
+
+        eqProcessorA.resetEq()
+        eqProcessorB.resetEq()
 
         val nextIdx = _playerState.value.currentIndex + 1
         val nextSong = playlist.getOrNull(nextIdx)
@@ -651,6 +700,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         crossfadeJob?.cancel()
         crossfadeJob = null
         isPrebufferedForIndex = -1
+
+        eqProcessorA.resetEq()
+        eqProcessorB.resetEq()
 
         inactiveDeck.pause()
         inactiveDeck.volume = 1.0f * duckMultiplier
