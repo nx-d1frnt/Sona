@@ -209,6 +209,7 @@ fun MainScreen(
             currentPositionMs = playerState.currentPositionMs,
             durationMs = playerState.durationMs,
             isShuffle = playerState.isShuffleEnabled,
+            shuffleMode = playerState.shuffleMode,
             repeatMode = playerState.repeatMode,
             queue = playerState.currentQueue,
             currentIndex = playerState.currentIndex,

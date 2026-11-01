@@ -7,6 +7,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.sona.player.automix.AutomixTransitionState
+import com.sona.player.automix.ShuffleMode
 import com.sona.player.data.model.Song
 import kotlinx.coroutines.flow.StateFlow
 
@@ -16,6 +17,7 @@ data class PlayerState(
     val currentPositionMs: Long = 0L,
     val durationMs: Long = 0L,
     val isShuffleEnabled: Boolean = false,
+    val shuffleMode: ShuffleMode = ShuffleMode.OFF,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val currentQueue: List<Song> = emptyList(),
     val currentIndex: Int = -1,

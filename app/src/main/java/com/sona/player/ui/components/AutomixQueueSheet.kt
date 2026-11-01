@@ -247,6 +247,7 @@ fun AutomixQueueSheet(
                                     toSongId = nextSongInQueue.id,
                                     fromAnalysis = analysis,
                                     toAnalysis = nextAnalysis,
+                                    mode = automixState.mode,
                                     isCompleted = index < currentIndex
                                 )
                             } else null

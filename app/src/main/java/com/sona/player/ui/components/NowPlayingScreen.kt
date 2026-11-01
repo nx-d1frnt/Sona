@@ -85,6 +85,7 @@ import androidx.media3.common.Player
 import coil.compose.AsyncImage
 import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixTransitionState
+import com.sona.player.automix.ShuffleMode
 import com.sona.player.data.model.Song
 import com.sona.player.ui.theme.rememberArtworkPalette
 import kotlin.math.roundToInt
@@ -97,6 +98,7 @@ fun NowPlayingScreen(
     currentPositionMs: Long,
     durationMs: Long,
     isShuffle: Boolean,
+    shuffleMode: ShuffleMode = ShuffleMode.OFF,
     repeatMode: Int,
     queue: List<Song> = emptyList(),
     currentIndex: Int = 0,
@@ -133,8 +135,17 @@ fun NowPlayingScreen(
         automixState.currentAnalysis?.takeIf { it.songId == song.id }
             ?: automixState.analyzedTracks[song.id]
     }
+    val activeNextAnalysis = remember(
+        automixState.nextMatchedSong?.id,
+        automixState.nextMatchedAnalysis,
+        automixState.analyzedTracks
+    ) {
+        val nextId = automixState.nextMatchedSong?.id
+        automixState.nextMatchedAnalysis?.takeIf { it.songId == nextId }
+            ?: nextId?.let { automixState.analyzedTracks[it] }
+    }
     val targetZoneFraction = if (automixState.isEnabled) {
-        activeTrackAnalysis?.effectiveZoneFraction(automixState.mode)
+        activeTrackAnalysis?.effectiveZoneFraction(automixState.mode, activeNextAnalysis)
             ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) 0.56f else 0.82f
     } else {
         1.0f
@@ -505,7 +516,7 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.65f)
                     )
 
-                    // Ненавязчивый индикатор текущего BPM, режима Automix и точного таймкода точки перехода
+                    // Ненавязчивый индикатор текущего BPM, режима Automix (вкл. решение AUTO) и точного таймкода точки перехода
                     val curBpm = activeTrackAnalysis?.bpm?.roundToInt()
                     if (automixState.isEnabled && curBpm != null) {
                         val tempoTag = if (automixState.isTransitioning && automixState.activeTempoRatio != 1.0f) {
@@ -513,20 +524,24 @@ fun NowPlayingScreen(
                             val sign = if (pct > 0) "+" else ""
                             " ($sign$pct%)"
                         } else ""
-                        val mixPointMs = activeTrackAnalysis.effectiveMixOutMs(automixState.mode)
-                        val mixPointTag = if (automixState.mode == AutomixMode.QUICK_MID_MIX) {
-                            " • MID @ ${formatTime(mixPointMs)}"
-                        } else {
-                            " • Mix @ ${formatTime(mixPointMs)}"
+                        val resolvedMode = activeTrackAnalysis.resolveEffectiveMode(automixState.mode, activeNextAnalysis)
+                        val mixPointMs = activeTrackAnalysis.effectiveMixOutMs(automixState.mode, activeNextAnalysis)
+                        val mixPointTag = when (automixState.mode) {
+                            AutomixMode.AUTO_DJ -> {
+                                val autoKind = if (resolvedMode == AutomixMode.QUICK_MID_MIX) "MID" else "Mix"
+                                " • AUTO ($autoKind @ ${formatTime(mixPointMs)})"
+                            }
+                            AutomixMode.QUICK_MID_MIX -> " • MID @ ${formatTime(mixPointMs)}"
+                            else -> " • Mix @ ${formatTime(mixPointMs)}"
                         }
                         Text(
                             text = "$curBpm BPM$tempoTag$mixPointTag",
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Medium,
-                            color = if (automixState.isTransitioning || automixState.mode == AutomixMode.QUICK_MID_MIX) {
+                            color = if (automixState.isTransitioning || resolvedMode == AutomixMode.QUICK_MID_MIX) {
                                 palette.secondaryAccent
                             } else {
-                                Color.White.copy(alpha = 0.55f)
+                                Color.White.copy(alpha = 0.60f)
                             }
                         )
                     } else {
@@ -586,16 +601,22 @@ fun NowPlayingScreen(
                             }
                         }
 
-                        // Automix Expressive Mode Pill: cycles OUTRO -> MID DJ -> OFF
-                        val isMidMixMode = automixState.mode == AutomixMode.QUICK_MID_MIX
+                        // Automix Expressive Mode Pill: cycles AUTO -> OUTRO -> MID DJ -> OFF
                         val automixBg by animateColorAsState(
                             targetValue = when (automixState.mode) {
+                                AutomixMode.AUTO_DJ -> palette.secondaryContainer.copy(alpha = 0.90f)
                                 AutomixMode.QUICK_MID_MIX -> palette.secondaryAccent.copy(alpha = 0.28f)
-                                AutomixMode.CLASSIC_OUTRO -> palette.secondaryContainer.copy(alpha = 0.85f)
+                                AutomixMode.CLASSIC_OUTRO -> palette.secondaryContainer.copy(alpha = 0.78f)
                                 AutomixMode.OFF -> Color.White.copy(alpha = 0.12f)
                             },
                             label = "AutomixBg"
                         )
+                        val automixBadgeText = when (automixState.mode) {
+                            AutomixMode.AUTO_DJ -> "AUTO"
+                            AutomixMode.CLASSIC_OUTRO -> "OUTRO"
+                            AutomixMode.QUICK_MID_MIX -> "MID"
+                            AutomixMode.OFF -> null
+                        }
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = automixBg,
@@ -614,10 +635,10 @@ fun NowPlayingScreen(
                                     tint = if (isAutomixEnabled) palette.secondaryAccent else Color.White.copy(alpha = 0.7f),
                                     modifier = Modifier.size(18.dp)
                                 )
-                                if (isMidMixMode) {
+                                if (automixBadgeText != null) {
                                     Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        text = "MID",
+                                        text = automixBadgeText,
                                         style = MaterialTheme.typography.labelSmall,
                                         fontWeight = FontWeight.ExtraBold,
                                         color = palette.secondaryAccent
@@ -626,19 +647,49 @@ fun NowPlayingScreen(
                             }
                         }
 
-                        // Shuffle pill (Monet PrimaryContainer & OnPrimaryContainer)
+                        // Shuffle Expressive Mode Pill: cycles OFF -> RANDOM -> SMART (Harmonic DJ Shuffle)
+                        val isSmartShuffle = shuffleMode == ShuffleMode.SMART
+                        val isAnyShuffle = shuffleMode != ShuffleMode.OFF || isShuffle
+                        val shuffleBg by animateColorAsState(
+                            targetValue = when (shuffleMode) {
+                                ShuffleMode.SMART -> palette.primaryAccent.copy(alpha = 0.28f)
+                                ShuffleMode.RANDOM -> palette.primaryContainer.copy(alpha = 0.85f)
+                                ShuffleMode.OFF -> if (isShuffle) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f)
+                            },
+                            label = "ShuffleBg"
+                        )
+                        val shuffleTint = when (shuffleMode) {
+                            ShuffleMode.SMART -> palette.primaryAccent
+                            ShuffleMode.RANDOM -> palette.onPrimaryContainer
+                            ShuffleMode.OFF -> if (isShuffle) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f)
+                        }
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = if (isShuffle) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
-                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                            color = shuffleBg,
+                            modifier = Modifier
+                                .height(40.dp)
+                                .clickable(onClick = onShuffleClick)
                         ) {
-                            IconButton(onClick = onShuffleClick) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Shuffle,
-                                    contentDescription = "Shuffle",
-                                    tint = if (isShuffle) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f),
-                                    modifier = Modifier.size(20.dp)
+                                    contentDescription = "Shuffle Mode",
+                                    tint = shuffleTint,
+                                    modifier = Modifier.size(19.dp)
                                 )
+                                if (isSmartShuffle) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = "SMART",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = palette.primaryAccent
+                                    )
+                                }
                             }
                         }
 

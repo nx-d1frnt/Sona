@@ -24,6 +24,7 @@ import com.sona.player.automix.AutomixQueueSelector
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.automix.AutomixTransitionTool
 import com.sona.player.automix.SavedTransition
+import com.sona.player.automix.ShuffleMode
 import com.sona.player.automix.TrackAnalysis
 import com.sona.player.data.model.Song
 import kotlinx.coroutines.CoroutineScope
@@ -113,6 +114,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     val playerState: StateFlow<PlayerState> = _playerState.asStateFlow()
 
     private val playlist = mutableListOf<Song>()
+    private val originalQueueOrder = mutableListOf<Song>()
     private val savedTransitions = mutableMapOf<String, SavedTransition>()
     private val userLockedNextForSongId = mutableSetOf<Long>()
 
@@ -269,16 +271,28 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         if (songs.isEmpty()) return
         cancelActiveCrossfade()
 
+        originalQueueOrder.clear()
+        originalQueueOrder.addAll(songs)
+
         playlist.clear()
         playlist.addAll(songs)
         savedTransitions.clear()
         userLockedNextForSongId.clear()
 
         val safeIndex = startIndex.coerceIn(0, songs.lastIndex)
+        if (_playerState.value.shuffleMode == ShuffleMode.RANDOM && safeIndex + 1 < playlist.size) {
+            val upcomingShuffled = playlist.subList(safeIndex + 1, playlist.size).shuffled()
+            for (k in upcomingShuffled.indices) {
+                playlist[safeIndex + 1 + k] = upcomingShuffled[k]
+            }
+        }
+
         val mediaItems = buildMediaItems(playlist)
 
         requestAudioFocus()
 
+        activeDeck.shuffleModeEnabled = false
+        inactiveDeck.shuffleModeEnabled = false
         activeDeck.volume = 1.0f * duckMultiplier
         activeDeck.playbackParameters = PlaybackParameters.DEFAULT
         activeDeck.setMediaItems(mediaItems, safeIndex, 0L)
@@ -471,10 +485,77 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Cycles Queue Shuffle Mode:
+     * OFF (Sequential) -> RANDOM (Random Shuffle) -> SMART (Harmonic BPM & Energy DJ Shuffle) -> OFF
+     */
     fun toggleShuffle() {
-        val nextShuffle = !activeDeck.shuffleModeEnabled
-        activeDeck.shuffleModeEnabled = nextShuffle
-        inactiveDeck.shuffleModeEnabled = nextShuffle
+        val currentShuffle = _playerState.value.shuffleMode
+        val nextShuffle = when (currentShuffle) {
+            ShuffleMode.OFF -> ShuffleMode.RANDOM
+            ShuffleMode.RANDOM -> ShuffleMode.SMART
+            ShuffleMode.SMART -> ShuffleMode.OFF
+        }
+
+        activeDeck.shuffleModeEnabled = false
+        inactiveDeck.shuffleModeEnabled = false
+
+        val curIdx = _playerState.value.currentIndex
+        if (crossfadeJob?.isActive != true && curIdx in playlist.indices && curIdx + 1 < playlist.size) {
+            when (nextShuffle) {
+                ShuffleMode.RANDOM -> {
+                    userLockedNextForSongId.clear()
+                    val upcomingShuffled = playlist.subList(curIdx + 1, playlist.size).shuffled()
+                    for (k in upcomingShuffled.indices) {
+                        playlist[curIdx + 1 + k] = upcomingShuffled[k]
+                    }
+                    syncUpcomingDeckMediaItems(curIdx)
+                }
+                ShuffleMode.OFF -> {
+                    userLockedNextForSongId.clear()
+                    val alreadyPlayedOrCurrentIds = playlist.subList(0, curIdx + 1).map { it.id }.toHashSet()
+                    val restoredUpcoming = originalQueueOrder.filter { it.id !in alreadyPlayedOrCurrentIds }
+                    if (restoredUpcoming.size == playlist.size - (curIdx + 1)) {
+                        for (k in restoredUpcoming.indices) {
+                            playlist[curIdx + 1 + k] = restoredUpcoming[k]
+                        }
+                        syncUpcomingDeckMediaItems(curIdx)
+                    }
+                }
+                ShuffleMode.SMART -> {
+                    // Smart DJ Shuffle will immediately match and move the best harmonic track to curIdx + 1
+                    userLockedNextForSongId.remove(playlist[curIdx].id)
+                }
+            }
+        }
+
+        isPrebufferedForIndex = -1
+        rebuildSavedTransitions(curIdx.coerceAtLeast(0))
+        val nextSong = playlist.getOrNull(curIdx + 1)
+        val nextAnalysis = nextSong?.let { analysisEngine.getCached(it.id) }
+
+        _playerState.value = _playerState.value.copy(
+            isShuffleEnabled = (nextShuffle != ShuffleMode.OFF),
+            shuffleMode = nextShuffle,
+            currentQueue = playlist.toList(),
+            automix = _playerState.value.automix.copy(
+                nextMatchedSong = nextSong,
+                nextMatchedAnalysis = nextAnalysis,
+                savedTransitions = savedTransitions.toMap()
+            )
+        )
+
+        if (curIdx in playlist.indices) {
+            triggerAnalysisAndSmartQueue(curIdx)
+        }
+    }
+
+    private fun syncUpcomingDeckMediaItems(curIdx: Int) {
+        if (curIdx + 1 >= playlist.size) return
+        val upcomingItems = buildMediaItems(playlist.subList(curIdx + 1, playlist.size))
+        if (activeDeck.mediaItemCount > curIdx + 1) {
+            activeDeck.replaceMediaItems(curIdx + 1, activeDeck.mediaItemCount, upcomingItems)
+        }
     }
 
     fun toggleRepeatMode() {
@@ -488,37 +569,44 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     }
 
     /**
-     * Cycles Automix mode: CLASSIC_OUTRO (Outro Mix) -> QUICK_MID_MIX (Mid-Track DJ Set) -> OFF -> CLASSIC_OUTRO
+     * Cycles Automix mode:
+     * AUTO_DJ (Auto Mid/Outro) -> CLASSIC_OUTRO (Outro Mix) -> QUICK_MID_MIX (Mid-Track DJ Set) -> OFF -> AUTO_DJ
      */
     fun toggleAutomix() {
         val currentAutomix = _playerState.value.automix
         val nextMode = when (currentAutomix.mode) {
+            AutomixMode.AUTO_DJ -> AutomixMode.CLASSIC_OUTRO
             AutomixMode.CLASSIC_OUTRO -> AutomixMode.QUICK_MID_MIX
             AutomixMode.QUICK_MID_MIX -> AutomixMode.OFF
-            AutomixMode.OFF -> AutomixMode.CLASSIC_OUTRO
+            AutomixMode.OFF -> AutomixMode.AUTO_DJ
         }
         val newEnabled = (nextMode != AutomixMode.OFF)
         if (!newEnabled && crossfadeJob?.isActive == true) {
             cancelActiveCrossfade()
         }
         isPrebufferedForIndex = -1
+        val curIdx = _playerState.value.currentIndex.coerceAtLeast(0)
         _playerState.value = _playerState.value.copy(
             automix = currentAutomix.copy(
                 isEnabled = newEnabled,
                 mode = nextMode
             )
         )
-        if (newEnabled) {
-            val idx = _playerState.value.currentIndex
-            if (idx in playlist.indices) {
-                triggerAnalysisAndSmartQueue(idx)
-            }
+        rebuildSavedTransitions(curIdx)
+        _playerState.value = _playerState.value.copy(
+            automix = _playerState.value.automix.copy(
+                savedTransitions = savedTransitions.toMap()
+            )
+        )
+        if (newEnabled && curIdx in playlist.indices) {
+            triggerAnalysisAndSmartQueue(curIdx)
         }
     }
 
     /**
-     * Analyzes the current track and upcoming candidates in the background,
-     * then selects the best harmonic BPM/Energy match and moves it "one step ahead" (to currentIndex + 1).
+     * Analyzes the current track and upcoming candidates in the background.
+     * When [ShuffleMode.SMART] is active, selects the best harmonic BPM/Energy match and moves it
+     * "one step ahead" (to currentIndex + 1); otherwise preserves sequential or random queue order.
      */
     private fun triggerAnalysisAndSmartQueue(currentIndex: Int) {
         analysisJob?.cancel()
@@ -546,9 +634,13 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             val curAnalysis = analysisEngine.getCached(currentSong.id)
                 ?: analysisEngine.analyzeSong(currentSong)
             rebuildSavedTransitions(currentIndex)
+            val initialNextSong = playlist.getOrNull(currentIndex + 1)
+            val initialNextAnalysis = initialNextSong?.let { analysisEngine.getCached(it.id) }
             _playerState.value = _playerState.value.copy(
                 automix = _playerState.value.automix.copy(
                     currentAnalysis = curAnalysis,
+                    nextMatchedSong = initialNextSong,
+                    nextMatchedAnalysis = initialNextAnalysis,
                     analyzedTracks = analysisEngine.getAllCached(),
                     savedTransitions = savedTransitions.toMap()
                 )
@@ -565,13 +657,20 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 if (!wasCached) {
                     analysisEngine.analyzeSong(candidate)
                 }
-                // Update smart match incrementally as candidates finish analyzing
-                if (_playerState.value.automix.isEnabled && crossfadeJob?.isActive != true) {
+                // Only reorder the queue when Smart DJ Shuffle (ShuffleMode.SMART) is active!
+                if (_playerState.value.shuffleMode == ShuffleMode.SMART && crossfadeJob?.isActive != true) {
                     applyOneStepAheadMatch(currentIndex, curAnalysis)
                 } else {
                     rebuildSavedTransitions(currentIndex)
+                    val nextSong = playlist.getOrNull(currentIndex + 1)
+                    val nextAnalysis = nextSong?.let { analysisEngine.getCached(it.id) }
+                    val topPairKey = if (nextSong != null) SavedTransition.key(currentSong.id, nextSong.id) else ""
+                    val topScore = savedTransitions[topPairKey]?.matchScorePercent ?: 85
                     _playerState.value = _playerState.value.copy(
                         automix = _playerState.value.automix.copy(
+                            nextMatchedSong = nextSong,
+                            nextMatchedAnalysis = nextAnalysis,
+                            matchScorePercent = topScore,
                             analyzedTracks = analysisEngine.getAllCached(),
                             savedTransitions = savedTransitions.toMap()
                         )
@@ -583,9 +682,13 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             }
 
             rebuildSavedTransitions(currentIndex)
+            val finalNextSong = playlist.getOrNull(currentIndex + 1)
+            val finalNextAnalysis = finalNextSong?.let { analysisEngine.getCached(it.id) }
             _playerState.value = _playerState.value.copy(
                 automix = _playerState.value.automix.copy(
                     isAnalyzing = false,
+                    nextMatchedSong = finalNextSong,
+                    nextMatchedAnalysis = finalNextAnalysis,
                     analyzedTracks = analysisEngine.getAllCached(),
                     savedTransitions = savedTransitions.toMap()
                 )
@@ -602,13 +705,17 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 val wasCached = analysisEngine.getCached(candidate.id) != null
                 if (!wasCached) {
                     analysisEngine.analyzeSong(candidate)
-                    rebuildSavedTransitions(currentIndex)
-                    _playerState.value = _playerState.value.copy(
-                        automix = _playerState.value.automix.copy(
-                            analyzedTracks = analysisEngine.getAllCached(),
-                            savedTransitions = savedTransitions.toMap()
+                    if (_playerState.value.shuffleMode == ShuffleMode.SMART && crossfadeJob?.isActive != true) {
+                        applyOneStepAheadMatch(currentIndex, curAnalysis)
+                    } else {
+                        rebuildSavedTransitions(currentIndex)
+                        _playerState.value = _playerState.value.copy(
+                            automix = _playerState.value.automix.copy(
+                                analyzedTracks = analysisEngine.getAllCached(),
+                                savedTransitions = savedTransitions.toMap()
+                            )
                         )
-                    )
+                    }
                     delay(200)
                 }
             }
@@ -742,8 +849,10 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         val curAnalysis = automix.currentAnalysis?.takeIf { it.songId == state.currentSong?.id }
             ?: state.currentSong?.let { analysisEngine.getCached(it.id) }
-        val mixOutMs = curAnalysis?.effectiveMixOutMs(automix.mode)
-            ?: if (automix.mode == AutomixMode.QUICK_MID_MIX) {
+        val nextAnalysis = analysisEngine.getCached(nextSong.id) ?: automix.nextMatchedAnalysis
+        val resolvedMode = curAnalysis?.resolveEffectiveMode(automix.mode, nextAnalysis) ?: automix.mode
+        val mixOutMs = curAnalysis?.effectiveMixOutMs(automix.mode, nextAnalysis)
+            ?: if (resolvedMode == AutomixMode.QUICK_MID_MIX) {
                 (durationMs * 0.56f).toLong().coerceAtLeast(15_000L)
             } else {
                 (durationMs - 14000L).coerceAtLeast((durationMs * 0.72f).toLong())
@@ -758,7 +867,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         // 2. Trigger the DJ Automix (High-Pass Blend -> Bass Swap -> Low-Pass Filter Sweep) when entering the Automix Zone
         if (positionMs >= mixOutMs && positionMs < durationMs - 2500L) {
-            val customDur = if (automix.mode == AutomixMode.QUICK_MID_MIX) 8500L else null
+            val customDur = if (resolvedMode == AutomixMode.QUICK_MID_MIX) 8500L else null
             startCrossfadeTransition(nextIndex, nextSong, customDurationMs = customDur)
         }
     }
@@ -767,9 +876,10 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         if (nextIndex !in playlist.indices) return
         val nextSong = playlist[nextIndex]
         val nextAnalysis = analysisEngine.getCached(nextSong.id)
-        val curEnergy = _playerState.value.automix.currentAnalysis?.energy ?: 0.6f
+        val curAnalysis = _playerState.value.automix.currentAnalysis
+        val curEnergy = curAnalysis?.energy ?: 0.6f
         val mode = _playerState.value.automix.mode
-        val cueInMs = nextAnalysis?.effectiveCueInMs(mode, curEnergy) ?: 0L
+        val cueInMs = nextAnalysis?.effectiveCueInMs(mode, curEnergy, curAnalysis) ?: 0L
 
         val items = buildMediaItems(playlist)
         inactiveDeck.pause()
@@ -805,7 +915,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         // Ensure incomingDeck is positioned at the smart entry point (in case analysis finished after prebuffer)
         val activeMode = _playerState.value.automix.mode
         val curEnergy = curAnalysis?.energy ?: 0.6f
-        val targetCueInMs = nextAnalysis?.effectiveCueInMs(activeMode, curEnergy) ?: 0L
+        val targetCueInMs = nextAnalysis?.effectiveCueInMs(activeMode, curEnergy, curAnalysis) ?: 0L
         if (targetCueInMs > 500L && kotlin.math.abs(incomingDeck.currentPosition - targetCueInMs) > 900L) {
             incomingDeck.seekTo(nextIndex, targetCueInMs)
         }

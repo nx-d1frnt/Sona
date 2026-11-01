@@ -148,7 +148,17 @@ object AutomixQueueSelector {
         val tool = selectOptimalTransitionTool(fromAnalysis, toAnalysis)
         val (_, inRatio) = computeTempoSyncRatios(fromAnalysis.bpm, toAnalysis.bpm)
         val syncPct = ((inRatio - 1.0f) * 100f).roundToInt()
-        val targetCueInMs = toAnalysis.effectiveCueInMs(mode, fromAnalysis.energy)
+        val resolvedMode = fromAnalysis.resolveEffectiveMode(mode, toAnalysis)
+        val targetCueInMs = toAnalysis.effectiveCueInMs(
+            mode = mode,
+            outgoingEnergy = fromAnalysis.energy,
+            outgoingAnalysis = fromAnalysis
+        )
+        val effectiveOverlapMs = if (resolvedMode == AutomixMode.QUICK_MID_MIX) {
+            8500L
+        } else {
+            fromAnalysis.crossfadeDurationMs
+        }
 
         return SavedTransition(
             fromSongId = fromSongId,
@@ -156,7 +166,7 @@ object AutomixQueueSelector {
             fromBpm = fromAnalysis.bpm,
             toBpm = toAnalysis.bpm,
             matchScorePercent = scorePct,
-            overlapDurationMs = fromAnalysis.crossfadeDurationMs,
+            overlapDurationMs = effectiveOverlapMs,
             cueInMs = targetCueInMs,
             transitionTool = tool,
             transitionStyle = "${tool.shortBadge} (${tool.toolsSummary})",
