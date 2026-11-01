@@ -6,8 +6,8 @@ import kotlin.math.min
 
 /**
  * Automix operating mode:
- * - [AUTO_DJ]: Smart Auto DJ mode — automatically decides per track/pair whether to transition
- *   from the post-chorus middle section (Mid-Track DJ Mix) or use the musical outro (Outro Automix).
+ * - [AUTO_DJ]: Prefers the musical outro; early mixing is reserved for long tracks with
+ *   a measured, sustained breakdown and a compatible next track.
  * - [CLASSIC_OUTRO]: Mixes in the musical outro phrase (last 12..18s of the track).
  * - [QUICK_MID_MIX]: Club Megamix / DJ Set mode — finds the post-chorus breakdown past the middle
  *   of the track (50%..67%) and transitions early for a fast-paced continuous mix.
@@ -86,7 +86,10 @@ data class TrackAnalysis(
     val crossfadeDurationMs: Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
     val durationMs: Long,
     val midMixOutMs: Long = (durationMs * 0.56f).toLong(), // Optimal post-chorus breakdown past the midpoint (50%..67%)
-    val deepCueInMs: Long = cueInMs  // Deeper hook/drop entry point (up to 32s) for Mid-Track DJ & high-energy mixes
+    val deepCueInMs: Long = cueInMs, // Deeper hook/drop entry point for explicit DJ mixes
+    val midMixConfidence: Float = 0f, // Heuristic strength of a sustained drop; 0 for fallback data
+    val beatSections: List<BeatSection> = emptyList(),
+    val vocalSections: List<VocalSection> = emptyList()
 ) {
     /**
      * Resolves [AutomixMode.AUTO_DJ] into either [AutomixMode.QUICK_MID_MIX] or [AutomixMode.CLASSIC_OUTRO]
@@ -96,35 +99,32 @@ data class TrackAnalysis(
     fun resolveEffectiveMode(mode: AutomixMode, nextAnalysis: TrackAnalysis? = null): AutomixMode {
         if (mode != AutomixMode.AUTO_DJ) return mode
 
-        // 1. Short tracks (< 2:35) always use Outro Mix so they aren't cut off after ~1 minute
-        if (durationMs < 155_000L) return AutomixMode.CLASSIC_OUTRO
-
-        // 2. Ensure there is enough separation between midMixOutMs and mixOutMs
-        if (mixOutMs - midMixOutMs < 18_000L) return AutomixMode.CLASSIC_OUTRO
-
-        if (nextAnalysis != null) {
-            val directDiff = abs(bpm - nextAnalysis.bpm)
-            val halfDiff = abs(bpm - nextAnalysis.bpm * 0.5f)
-            val doubleDiff = abs(bpm - nextAnalysis.bpm * 2.0f)
-            val minBpmDiff = min(directDiff, min(halfDiff, doubleDiff))
-
-            // High-energy club/pop pair with tight tempo lock -> Mid-Track DJ Mix!
-            if (energy >= 0.62f && nextAnalysis.energy >= 0.58f && minBpmDiff <= 8.0f) {
-                return AutomixMode.QUICK_MID_MIX
-            }
-            // Long energetic track (>= 3:15) transitioning into an upbeat track -> Mid-Track DJ Mix!
-            if (durationMs >= 195_000L && energy >= 0.54f && nextAnalysis.energy >= 0.50f && minBpmDiff <= 12.0f) {
-                return AutomixMode.QUICK_MID_MIX
-            }
-            // Very long track (>= 3:45) with moderate+ energy -> Mid-Track DJ Mix so it doesn't drag
-            if (durationMs >= 225_000L && energy >= 0.48f) {
-                return AutomixMode.QUICK_MID_MIX
-            }
+        // AUTO is a listening mode: BPM/energy similarity alone cannot justify cutting a song.
+        // Unknown/legacy/fallback analysis carries no structural confidence and uses the outro.
+        val next = nextAnalysis ?: return AutomixMode.CLASSIC_OUTRO
+        if (durationMs < 240_000L || !midMixConfidence.isFinite() || midMixConfidence < 0.80f) {
             return AutomixMode.CLASSIC_OUTRO
         }
+        val earliestMidMs = maxOf(150_000L, (durationMs * 0.55).toLong())
+        if (midMixOutMs < earliestMidMs || midMixOutMs > (durationMs * 0.67).toLong() ||
+            mixOutMs - midMixOutMs < 30_000L
+        ) return AutomixMode.CLASSIC_OUTRO
 
-        // Fallback before nextAnalysis is ready: use Mid-Track Mix for long & energetic tracks
-        return if ((durationMs >= 185_000L && energy >= 0.64f) || (durationMs >= 215_000L && energy >= 0.52f)) {
+        if (!bpm.isFinite() || !next.bpm.isFinite() || bpm <= 0f || next.bpm <= 0f ||
+            !energy.isFinite() || !next.energy.isFinite() ||
+            energy < 0.60f || next.energy < 0.58f || abs(energy - next.energy) > 0.12f
+        ) return AutomixMode.CLASSIC_OUTRO
+
+        // A breakdown with continuing vocals is not a safe place for an automatic early exit.
+        val vocalRisk = MusicalCueSelector.vocalRisk(this, midMixOutMs, midMixOutMs + 8500L)
+            ?: return AutomixMode.CLASSIC_OUTRO
+        if (vocalRisk >= 0.30f) return AutomixMode.CLASSIC_OUTRO
+
+        val directDiff = abs(bpm - next.bpm)
+        val halfDiff = abs(bpm - next.bpm * 0.5f)
+        val doubleDiff = abs(bpm - next.bpm * 2.0f)
+        val relativeBpmDiff = min(directDiff, min(halfDiff, doubleDiff)) / bpm
+        return if (relativeBpmDiff <= 0.04f) {
             AutomixMode.QUICK_MID_MIX
         } else {
             AutomixMode.CLASSIC_OUTRO
@@ -141,21 +141,28 @@ data class TrackAnalysis(
         outgoingAnalysis: TrackAnalysis? = null
     ): Long {
         val resolvedMode = outgoingAnalysis?.resolveEffectiveMode(mode, this) ?: mode
-        return when {
+        val base = when {
             resolvedMode == AutomixMode.QUICK_MID_MIX -> deepCueInMs
-            outgoingEnergy >= 0.68f && deepCueInMs > cueInMs + 3500L -> deepCueInMs
+            mode != AutomixMode.AUTO_DJ && outgoingEnergy >= 0.68f &&
+                deepCueInMs > cueInMs + 3500L -> deepCueInMs
             else -> cueInMs
         }
+        val overlap = if (resolvedMode == AutomixMode.QUICK_MID_MIX) 8500L
+            else outgoingAnalysis?.crossfadeDurationMs ?: 10_500L
+        return MusicalCueSelector.incoming(this, base, overlap)
     }
 
     /**
      * Returns the active mix-out timestamp in milliseconds for the chosen [AutomixMode].
      */
     fun effectiveMixOutMs(mode: AutomixMode, nextAnalysis: TrackAnalysis? = null): Long {
-        return when (resolveEffectiveMode(mode, nextAnalysis)) {
-            AutomixMode.QUICK_MID_MIX -> midMixOutMs
-            else -> mixOutMs
-        }
+        val resolved = resolveEffectiveMode(mode, nextAnalysis)
+        val early = resolved == AutomixMode.QUICK_MID_MIX
+        val base = if (early) midMixOutMs else mixOutMs
+        // Explicit Mid DJ retains its broad search range; AUTO keeps the conservative minimum.
+        if (early && mode == AutomixMode.QUICK_MID_MIX) return base
+        return MusicalCueSelector.outgoing(this, base, if (early) 8500L else crossfadeDurationMs, early)
+
     }
 
     /**

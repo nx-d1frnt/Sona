@@ -146,7 +146,7 @@ object AutomixQueueSelector {
         val rawScore = computeCompatibilityScore(fromAnalysis, toAnalysis)
         val scorePct = (rawScore * 100f).roundToInt().coerceIn(62, 99)
         val tool = selectOptimalTransitionTool(fromAnalysis, toAnalysis)
-        val (_, inRatio) = computeTempoSyncRatios(fromAnalysis.bpm, toAnalysis.bpm)
+        val (_, inRatio) = MusicalCueSelector.tempoRatios(fromAnalysis, toAnalysis, mode)
         val syncPct = ((inRatio - 1.0f) * 100f).roundToInt()
         val resolvedMode = fromAnalysis.resolveEffectiveMode(mode, toAnalysis)
         val targetCueInMs = toAnalysis.effectiveCueInMs(

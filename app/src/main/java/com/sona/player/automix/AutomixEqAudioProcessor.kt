@@ -8,13 +8,11 @@ import androidx.media3.common.util.UnstableApi
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.pow
 
 /**
- * Unconditionally stable, zero-lag stereo DJ DSP Engine for Sona's Automix:
- * - In-Processor Fractional Resampler for smooth BPM Tempo Sync (0.93x .. 1.07x) without triggering
- *   ExoPlayer's SonicAudioProcessor pipeline reconfigurations or DefaultAudioSink stalls.
+ * Stereo DJ DSP engine for Sona's Automix:
+ * Tempo changes are handled separately by ExoPlayer's pitch-preserving Sonic processor.
  * - 2-Pole State-Variable Sub-Bass Isolator (< 240 Hz, 12 dB/oct) for tight DJ Bass Swaps.
  * - Exponential 2-Pole Low-Pass Filter Sweep (15 kHz -> 240 Hz) for warm "underwater" outro tails.
  * - High-Pass Tension Riser Sweep (< 650 Hz) for energy-lift drop transitions.
@@ -42,20 +40,13 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
     @Volatile
     private var targetEchoMix: Float = 0f
 
-    // Real-time BPM tempo sync speed ratio (1.0f = natural speed, clamped to [0.93f .. 1.07f])
     @Volatile
-    private var targetTempoSpeed: Float = 1.0f
+    private var resetRequested = false
 
     private var currentBassCut: Float = 0f
     private var currentLpfAlpha: Float = 1f
     private var currentHpfMix: Float = 0f
     private var currentEchoMix: Float = 0f
-    private var currentTempoSpeed: Float = 1.0f
-
-    // Fractional resampler state across buffer boundaries (Left = 0, Right = 1)
-    private var resamplePhase: Double = 0.0
-    private val prevSample = FloatArray(2)
-    private val currSample = FloatArray(2)
 
     // 2-pole cascaded RC filter states per channel (Left = 0, Right = 1)
     private val lpfStage1 = FloatArray(2)
@@ -75,15 +66,13 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
 
     /**
      * Updates the outgoing track's DSP parameters at normalized transition progress [0..1]
-     * according to the automatically selected [AutomixTransitionTool] and BPM sync ratio.
+     * according to the automatically selected [AutomixTransitionTool].
      */
     fun updateOutgoingEq(
         progress: Float,
-        tool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP,
-        tempoSpeed: Float = 1.0f
+        tool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP
     ) {
         val t = progress.coerceIn(0f, 1f)
-        targetTempoSpeed = tempoSpeed.coerceIn(0.93f, 1.07f)
 
         when (tool) {
             AutomixTransitionTool.HIGH_PASS_RISER_SLAM -> {
@@ -184,15 +173,13 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
 
     /**
      * Updates the incoming track's DSP parameters at normalized transition progress [0..1]
-     * according to the automatically selected [AutomixTransitionTool] and BPM sync ratio.
+     * according to the automatically selected [AutomixTransitionTool].
      */
     fun updateIncomingEq(
         progress: Float,
-        tool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP,
-        tempoSpeed: Float = 1.0f
+        tool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP
     ) {
         val t = progress.coerceIn(0f, 1f)
-        targetTempoSpeed = tempoSpeed.coerceIn(0.93f, 1.07f)
         targetEchoMix = 0f
 
         when (tool) {
@@ -242,7 +229,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
             }
         }
 
-        isDspActive = (t < 0.98f) || abs(targetTempoSpeed - 1.0f) > 0.001f
+        isDspActive = t < 0.98f
     }
 
     /**
@@ -254,20 +241,24 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
         targetLpfCutoffHz = 20000f
         targetHighPassMix = 0f
         targetEchoMix = 0f
-        targetTempoSpeed = 1.0f
+        // Mutable filter/delay history belongs to the audio thread.
+        resetRequested = true
+    }
+
+    private fun resetSignalState() {
         currentBassCut = 0f
         currentLpfAlpha = 1f
         currentHpfMix = 0f
         currentEchoMix = 0f
-        currentTempoSpeed = 1.0f
-        resamplePhase = 0.0
-        prevSample[0] = 0f; prevSample[1] = 0f
         lpfStage1[0] = 0f; lpfStage1[1] = 0f
         lpfStage2[0] = 0f; lpfStage2[1] = 0f
         bassStage1[0] = 0f; bassStage1[1] = 0f
         bassStage2[0] = 0f; bassStage2[1] = 0f
         hpfStage1[0] = 0f; hpfStage1[1] = 0f
         echoLpL = 0f; echoLpR = 0f
+        echoBufferL.fill(0f)
+        echoBufferR.fill(0f)
+        echoWritePos = 0
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -281,6 +272,10 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {
+        if (resetRequested) {
+            resetRequested = false
+            resetSignalState()
+        }
         val remaining = inputBuffer.remaining()
         if (remaining == 0) return
 
@@ -289,8 +284,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
             currentBassCut < 0.005f &&
             currentLpfAlpha > 0.985f &&
             currentHpfMix < 0.005f &&
-            currentEchoMix < 0.005f &&
-            abs(currentTempoSpeed - 1.0f) < 0.001f
+            currentEchoMix < 0.005f
         ) {
             val outputBuffer = replaceOutputBuffer(remaining)
             outputBuffer.put(inputBuffer)
@@ -306,9 +300,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
             return
         }
 
-        // Allocate enough output space even when slowing tempo down to 0.92x
-        val maxOutputFrames = ((frameCount / 0.90f).toInt() + 8).coerceAtLeast(frameCount + 4)
-        val outputBuffer = replaceOutputBuffer(maxOutputFrames * frameSize).order(ByteOrder.nativeOrder())
+        val outputBuffer = replaceOutputBuffer(frameCount * frameSize).order(ByteOrder.nativeOrder())
         inputBuffer.order(ByteOrder.nativeOrder())
 
         val sampleRate = inputAudioFormat.sampleRate.toFloat().coerceAtLeast(8000f)
@@ -336,88 +328,68 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
         val targetCut = targetBassCut
         val targetHpf = targetHighPassMix
         val targetEcho = targetEchoMix
-        val targetSpeed = targetTempoSpeed.coerceIn(0.93f, 1.07f)
-
-        var outFramesWritten = 0
 
         for (frame in 0 until frameCount) {
             currentBassCut += (targetCut - currentBassCut) * 0.004f
             currentLpfAlpha += (targetAlpha - currentLpfAlpha) * 0.004f
             currentHpfMix += (targetHpf - currentHpfMix) * 0.004f
             currentEchoMix += (targetEcho - currentEchoMix) * 0.004f
-            currentTempoSpeed += (targetSpeed - currentTempoSpeed) * 0.002f
+
+            // Read delayed stereo samples for Ping-Pong Dub Echo
+            val readIdx = (echoWritePos - delaySamples) and delayMask
+            val delayedL = echoBufferL[readIdx]
+            val delayedR = echoBufferR[readIdx]
+            echoLpL += 0.28f * (delayedL - echoLpL)
+            echoLpR += 0.28f * (delayedR - echoLpR)
+
+            var processedL = 0f
+            var processedR = 0f
 
             for (ch in 0 until channels) {
-                currSample[ch] = inputBuffer.short * (1f / 32768f)
-            }
+                val x = inputBuffer.short * (1f / 32768f)
 
-            // Fractional resampler loop: produces 0, 1, or 2 output frames per input frame
-            while (resamplePhase < 1.0 && outFramesWritten < maxOutputFrames) {
-                val frac = resamplePhase.toFloat()
+                // Stage A: 2-Pole Low-Pass DJ Filter Sweep (12 dB/oct warm roll-off)
+                val lp1 = lpfStage1[ch] + currentLpfAlpha * (x - lpfStage1[ch])
+                lpfStage1[ch] = lp1
+                val lp2 = lpfStage2[ch] + currentLpfAlpha * (lp1 - lpfStage2[ch])
+                lpfStage2[ch] = lp2
 
-                // Read delayed stereo samples for Ping-Pong Dub Echo
-                val readIdx = (echoWritePos - delaySamples) and delayMask
-                val delayedL = echoBufferL[readIdx]
-                val delayedR = echoBufferR[readIdx]
-                echoLpL += 0.28f * (delayedL - echoLpL)
-                echoLpR += 0.28f * (delayedR - echoLpR)
+                // Stage B: 2-Pole Sub-Bass & Kick Isolator (< 240 Hz)
+                val b1 = bassStage1[ch] + bassAlpha * (lp2 - bassStage1[ch])
+                bassStage1[ch] = b1
+                val subBass = bassStage2[ch] + bassAlpha * (b1 - bassStage2[ch])
+                bassStage2[ch] = subBass
 
-                var processedL = 0f
-                var processedR = 0f
+                // Subtract isolated bass according to DJ Bass Swap curve
+                var y = lp2 - (currentBassCut * subBass)
 
-                for (ch in 0 until channels) {
-                    val x = prevSample[ch] + frac * (currSample[ch] - prevSample[ch])
-
-                    // Stage A: 2-Pole Low-Pass DJ Filter Sweep (12 dB/oct warm roll-off)
-                    val lp1 = lpfStage1[ch] + currentLpfAlpha * (x - lpfStage1[ch])
-                    lpfStage1[ch] = lp1
-                    val lp2 = lpfStage2[ch] + currentLpfAlpha * (lp1 - lpfStage2[ch])
-                    lpfStage2[ch] = lp2
-
-                    // Stage B: 2-Pole Sub-Bass & Kick Isolator (< 240 Hz)
-                    val b1 = bassStage1[ch] + bassAlpha * (lp2 - bassStage1[ch])
-                    bassStage1[ch] = b1
-                    val subBass = bassStage2[ch] + bassAlpha * (b1 - bassStage2[ch])
-                    bassStage2[ch] = subBass
-
-                    // Subtract isolated bass according to DJ Bass Swap curve
-                    var y = lp2 - (currentBassCut * subBass)
-
-                    // Stage C: High-Pass Filter (for incoming entry or outgoing Tension Riser)
-                    val hpLp = hpfStage1[ch] + hpfAlpha * (y - hpfStage1[ch])
-                    hpfStage1[ch] = hpLp
-                    if (currentHpfMix > 0.005f) {
-                        val highPassed = y - hpLp
-                        y = y * (1f - currentHpfMix) + highPassed * currentHpfMix
-                    }
-
-                    // Stage D: Add Stereo Ping-Pong Dub Echo Wash
-                    val echoSignal = if (ch == 0) echoLpL else echoLpR
-                    val withEcho = y + currentEchoMix * echoSignal
-
-                    val filterMakeup = 1f + (currentBassCut * 0.12f)
-                    val finalSample = withEcho * filterMakeup
-
-                    if (ch == 0) processedL = y else processedR = y
-
-                    val outInt = (finalSample * 32767f).toInt().coerceIn(-32768, 32767)
-                    outputBuffer.putShort(outInt.toShort())
+                // Stage C: High-Pass Filter (for incoming entry or outgoing Tension Riser)
+                val hpLp = hpfStage1[ch] + hpfAlpha * (y - hpfStage1[ch])
+                hpfStage1[ch] = hpLp
+                if (currentHpfMix > 0.005f) {
+                    val highPassed = y - hpLp
+                    y = y * (1f - currentHpfMix) + highPassed * currentHpfMix
                 }
 
-                // Write into cross-stereo ping-pong delay line with warm 38% feedback
-                if (channels == 1) processedR = processedL
-                echoBufferL[echoWritePos] = (processedL + echoLpR * 0.38f).coerceIn(-1.0f, 1.0f)
-                echoBufferR[echoWritePos] = (processedR + echoLpL * 0.38f).coerceIn(-1.0f, 1.0f)
-                echoWritePos = (echoWritePos + 1) and delayMask
+                // Stage D: Add Stereo Ping-Pong Dub Echo Wash
+                val echoSignal = if (ch == 0) echoLpL else echoLpR
+                val withEcho = y + currentEchoMix * echoSignal
 
-                outFramesWritten++
-                resamplePhase += currentTempoSpeed.toDouble()
+                val filterMakeup = 1f + (currentBassCut * 0.12f)
+                val finalSample = withEcho * filterMakeup
+
+                if (ch == 0) processedL = y else processedR = y
+
+                val outInt = (finalSample * 32767f).toInt().coerceIn(-32768, 32767)
+                outputBuffer.putShort(outInt.toShort())
             }
 
-            resamplePhase -= 1.0
-            for (ch in 0 until channels) {
-                prevSample[ch] = currSample[ch]
-            }
+            // Write into cross-stereo ping-pong delay line with warm 38% feedback
+            if (channels == 1) processedR = processedL
+            echoBufferL[echoWritePos] = (processedL + echoLpR * 0.38f).coerceIn(-1.0f, 1.0f)
+            echoBufferR[echoWritePos] = (processedR + echoLpL * 0.38f).coerceIn(-1.0f, 1.0f)
+            echoWritePos = (echoWritePos + 1) and delayMask
+
         }
 
         // Consume any trailing odd bytes so DefaultAudioSink never stalls
@@ -429,17 +401,12 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun onFlush() {
-        resamplePhase = 0.0
-        prevSample[0] = 0f; prevSample[1] = 0f
-        lpfStage1[0] = 0f; lpfStage1[1] = 0f
-        lpfStage2[0] = 0f; lpfStage2[1] = 0f
-        bassStage1[0] = 0f; bassStage1[1] = 0f
-        bassStage2[0] = 0f; bassStage2[1] = 0f
-        hpfStage1[0] = 0f; hpfStage1[1] = 0f
-        echoLpL = 0f; echoLpR = 0f
+        resetSignalState()
     }
 
     override fun onReset() {
         resetEq()
+        resetSignalState()
+        resetRequested = false
     }
 }

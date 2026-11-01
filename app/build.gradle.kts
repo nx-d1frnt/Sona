@@ -20,11 +20,15 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
     compileOptions {
@@ -34,12 +38,17 @@ android {
     kotlinOptions {
         jvmTarget = "21"
     }
+    androidResources {
+        noCompress += "tflite"
+    }
     buildFeatures {
         compose = true
     }
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
@@ -57,6 +66,9 @@ dependencies {
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)
     implementation(libs.androidx.media3.common)
+
+    // Offline vocal classification
+    implementation(libs.tensorflow.lite)
 
     // Image loading
     implementation(libs.coil.compose)

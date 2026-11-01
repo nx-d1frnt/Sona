@@ -1,9 +1,6 @@
 package com.sona.player.automix
 
 import android.content.Context
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaFormat
 import com.sona.player.data.model.Song
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,14 +15,12 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 /**
  * Hybrid background audio analyzer with persistent local disk cache.
@@ -34,9 +29,10 @@ import kotlin.math.sqrt
  */
 class AudioAnalysisEngine(private val context: Context) {
 
+    private val windowDecoder = AudioWindowDecoder(context)
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
-    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v5.json")
-    private val tempCacheFile = File(context.filesDir, "sona_automix_analysis_v5.json.tmp")
+    private val cacheFile = File(context.filesDir, "sona_automix_analysis_v7.json")
+    private val tempCacheFile = File(context.filesDir, "sona_automix_analysis_v7.json.tmp")
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
     private val cacheSaveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheWriteMutex = Mutex()
@@ -55,7 +51,7 @@ class AudioAnalysisEngine(private val context: Context) {
         val analysis = codecSemaphore.withPermit {
             memoryCache[song.id]?.let { return@withPermit it }
             withContext(Dispatchers.Default) {
-                withTimeoutOrNull(8000L) {
+                withTimeoutOrNull(20_000L) {
                     decodeAndAnalyze(song)
                 } ?: createFallbackAnalysis(song)
             }
@@ -66,7 +62,7 @@ class AudioAnalysisEngine(private val context: Context) {
         return analysis
     }
 
-    private fun decodeAndAnalyze(song: Song): TrackAnalysis {
+    private suspend fun decodeAndAnalyze(song: Song): TrackAnalysis {
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
         // 1. Sample 3 structural windows:
@@ -74,31 +70,32 @@ class AudioAnalysisEngine(private val context: Context) {
         // - Core/Mid: 48% .. 70% of track at 40 Hz (25ms frames) for BPM & Mid-Track Post-Chorus Breakdown
         // - Outro: last 28% of track (18s..38s) at 25 Hz (40ms frames) for Outro Phrase Mix-Out
         val introWindowMs = min(24_000L, (durationMs * 35L) / 100L)
-        val introFrames = extractEnergyEnvelope(
-            song = song,
-            startMs = 0L,
-            windowDurationMs = introWindowMs,
-            frameDurationMs = 25
-        )
+        val intro = windowDecoder.decode(song, 0L, introWindowMs)
+        val introFrames = intro.rmsEnvelope(25)
 
         val coreStartMs = (durationMs * 0.48f).toLong()
         val coreWindowMs = (durationMs * 0.22f).toLong().coerceIn(14_000L, 42_000L)
-        val coreFrames = extractEnergyEnvelope(
-            song = song,
-            startMs = coreStartMs,
-            windowDurationMs = coreWindowMs,
-            frameDurationMs = 25
-        )
+        val core = windowDecoder.decode(song, coreStartMs, coreWindowMs)
+        val coreFrames = core.rmsEnvelope(25)
 
         val outroWindowMs = (durationMs * 0.28f).toLong().coerceIn(18_000L, 38_000L)
             .coerceAtMost(durationMs / 2)
         val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
-        val outroFrames = extractEnergyEnvelope(
-            song = song,
-            startMs = outroStartMs,
-            windowDurationMs = outroWindowMs,
-            frameDurationMs = 40
-        )
+        val outro = windowDecoder.decode(song, outroStartMs, outroWindowMs)
+        val outroFrames = outro.rmsEnvelope(40)
+        val windows = listOf(intro, core, outro)
+        val beats = windows.mapNotNull { BeatTracker.analyze(it) }
+        val vocals = try {
+            YamnetVocalDetector(context).use { detector -> windows.flatMap { detector.analyze(it) } }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            android.util.Log.w("SonaAnalysis", "Vocal classifier unavailable", failure)
+            emptyList()
+        } catch (failure: LinkageError) {
+            android.util.Log.w("SonaAnalysis", "Vocal classifier runtime unavailable", failure)
+            emptyList()
+        }
 
         if (coreFrames.isEmpty()) {
             return createFallbackAnalysis(song)
@@ -112,7 +109,8 @@ class AudioAnalysisEngine(private val context: Context) {
         val normalizedEnergy = ((dbValue + 38f) / 32f).coerceIn(0.12f, 0.98f)
 
         // 3. Compute BPM via onset flux autocorrelation on 40 Hz core envelope (with half-time octave folding)
-        val estimatedBpm = estimateBpmFromEnvelope(
+        val measuredBpm = beats.firstOrNull { it.startMs == core.startMs && it.confidence >= 0.65f }?.bpm
+        val estimatedBpm = measuredBpm ?: estimateBpmFromEnvelope(
             envelope = coreFrames,
             envelopeHz = 40f,
             normalizedEnergy = normalizedEnergy,
@@ -141,7 +139,7 @@ class AudioAnalysisEngine(private val context: Context) {
         // 6. Compute Structural Outro Phrase Mix-Out point (70%..90% of track, adapting per song)
         val mixOutMs = findOutroTransitionPoint(
             outroFrames = outroFrames,
-            outroStartMs = outroStartMs,
+            outroStartMs = outro.startMs,
             frameDurationMs = 40L,
             avgCoreRms = avgRms,
             estimatedBpm = estimatedBpm,
@@ -150,9 +148,9 @@ class AudioAnalysisEngine(private val context: Context) {
         )
 
         // 7. Compute Mid-Track Breakdown / Post-Chorus Mix-Out point (strictly >= 50% of track: 50%..67%)
-        val midMixOutMs = findMidTrackTransitionPoint(
+        val midPoint = MidTrackTransitionDetector.detect(
             coreFrames = coreFrames,
-            coreStartMs = coreStartMs,
+            coreStartMs = core.startMs,
             frameDurationMs = 25L,
             estimatedBpm = estimatedBpm,
             durationMs = durationMs,
@@ -165,7 +163,10 @@ class AudioAnalysisEngine(private val context: Context) {
             energy = normalizedEnergy,
             cueInMs = cueInMs,
             mixOutMs = mixOutMs,
-            midMixOutMs = midMixOutMs,
+            midMixOutMs = midPoint.positionMs,
+            midMixConfidence = midPoint.confidence,
+            beatSections = beats,
+            vocalSections = vocals,
             deepCueInMs = deepCueInMs,
             crossfadeDurationMs = recommendedMixDurationMs,
             durationMs = durationMs
@@ -382,235 +383,6 @@ class AudioAnalysisEngine(private val context: Context) {
     }
 
     /**
-     * Searches the middle-to-upper region of the track (50%..67%) for the natural post-chorus
-     * energy step-down or breakdown phrase boundary so Mid-Track DJ Mode always transitions
-     * past the halfway mark (>= 50%) and adapts uniquely to every track's structure.
-     */
-    private fun findMidTrackTransitionPoint(
-        coreFrames: FloatArray,
-        coreStartMs: Long,
-        frameDurationMs: Long,
-        estimatedBpm: Float,
-        durationMs: Long,
-        mixOutMs: Long
-    ): Long {
-        val minMidMs = (durationMs * 0.50f).toLong().coerceAtLeast(20_000L)
-        val maxMidMs = (durationMs * 0.67f).toLong()
-            .coerceAtMost((mixOutMs - 7000L).coerceAtLeast(minMidMs))
-
-        if (coreFrames.size < 80 || maxMidMs <= minMidMs) {
-            return ((minMidMs + maxMidMs) / 2L).coerceIn(minMidMs, maxMidMs.coerceAtLeast(minMidMs))
-        }
-
-        // Group 25ms frames into 500ms musical phrase blocks (20 frames per block)
-        val blockSize = (500L / frameDurationMs).toInt().coerceAtLeast(4)
-        val numBlocks = coreFrames.size / blockSize
-        if (numBlocks < 8) return ((minMidMs + maxMidMs) / 2L)
-
-        val blockRms = FloatArray(numBlocks)
-        val blockGroove = FloatArray(numBlocks)
-        for (b in 0 until numBlocks) {
-            var rmsSum = 0f
-            var fluxSum = 0f
-            val offset = b * blockSize
-            for (k in 0 until blockSize) {
-                val cur = coreFrames[offset + k]
-                val prev = if (offset + k > 0) coreFrames[offset + k - 1] else cur
-                rmsSum += cur
-                if (cur > prev) fluxSum += (cur - prev)
-            }
-            blockRms[b] = rmsSum / blockSize
-            // Combine sustained RMS energy + percussive transient flux
-            blockGroove[b] = blockRms[b] * 0.60f + (fluxSum / blockSize) * 2.0f
-        }
-
-        val maxGroove = (blockGroove.maxOrNull() ?: 0.1f).coerceAtLeast(0.01f)
-        val barMs = ((60_000f / estimatedBpm.coerceIn(75f, 170f)) * 4f).toLong().coerceIn(1400L, 3000L)
-
-        // Evaluate every phrase boundary block inside [minMidMs .. maxMidMs] for:
-        // 1) Strongest post-chorus step-down (3.5s chorus window before b -> 3.0s bridge/breakdown window after b)
-        // 2) Local breakdown valley contrast (dip after a high-energy peak)
-        var bestBoundaryBlock = -1
-        var bestBoundaryScore = -Float.MAX_VALUE
-        val lookback = 7  // 3.5s before
-        val lookahead = 6 // 3.0s after
-
-        for (b in 3 until (numBlocks - 2)) {
-            val blockTimeMs = coreStartMs + (b * 500L)
-            if (blockTimeMs < minMidMs || blockTimeMs > maxMidMs + barMs) continue
-
-            var beforeSum = 0f
-            var beforeCount = 0
-            for (k in 1..lookback) {
-                if (b - k >= 0) {
-                    beforeSum += blockGroove[b - k]
-                    beforeCount++
-                }
-            }
-            var afterSum = 0f
-            var afterCount = 0
-            for (k in 0 until lookahead) {
-                if (b + k < numBlocks) {
-                    afterSum += blockGroove[b + k]
-                    afterCount++
-                }
-            }
-
-            val beforeAvg = if (beforeCount > 0) beforeSum / beforeCount else blockGroove[b]
-            val afterAvg = if (afterCount > 0) afterSum / afterCount else blockGroove[b]
-
-            // Step-down contrast: positive when a high-energy chorus drops into a bridge/verse/breakdown
-            val stepDownContrast = (beforeAvg - afterAvg) / maxGroove
-            // Valley depth right at [b, b+1] relative to the preceding section
-            val localDip = (beforeAvg - ((blockGroove[b] + blockGroove[(b + 1).coerceAtMost(numBlocks - 1)]) * 0.5f)) / maxGroove
-            // Bonus if the preceding section was genuinely an energetic chorus (>= 65% of maxGroove)
-            val chorusBonus = if (beforeAvg >= maxGroove * 0.65f) 0.18f else 0f
-
-            val totalScore = stepDownContrast * 1.4f + localDip * 0.9f + chorusBonus
-            if (totalScore > bestBoundaryScore) {
-                bestBoundaryScore = totalScore
-                bestBoundaryBlock = b
-            }
-        }
-
-        if (bestBoundaryBlock < 0) {
-            return ((minMidMs + maxMidMs) / 2L)
-        }
-
-        // Start the transition ~1 bar before the post-chorus boundary so the incoming track layers seamlessly
-        val candidateMs = coreStartMs + (bestBoundaryBlock * 500L) - barMs
-        return candidateMs.coerceIn(minMidMs, maxMidMs)
-    }
-
-    /**
-     * Decodes a window of audio via MediaExtractor + MediaCodec and returns an array of RMS energy frames.
-     */
-    private fun extractEnergyEnvelope(
-        song: Song,
-        startMs: Long,
-        windowDurationMs: Long,
-        frameDurationMs: Int
-    ): FloatArray {
-        val extractor = MediaExtractor()
-        var codec: MediaCodec? = null
-        try {
-            extractor.setDataSource(context, song.contentUri, null)
-            var audioTrackIndex = -1
-            var audioFormat: MediaFormat? = null
-
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("audio/")) {
-                    audioTrackIndex = i
-                    audioFormat = format
-                    break
-                }
-            }
-
-            if (audioTrackIndex == -1 || audioFormat == null) return FloatArray(0)
-            extractor.selectTrack(audioTrackIndex)
-
-            val mime = audioFormat.getString(MediaFormat.KEY_MIME) ?: return FloatArray(0)
-            val sampleRate = if (audioFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                audioFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            } else 44100
-            val channels = if (audioFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                audioFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
-            } else 2
-
-            extractor.seekTo(startMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
-
-            codec = MediaCodec.createDecoderByType(mime)
-            codec.configure(audioFormat, null, null, 0)
-            codec.start()
-
-            val samplesPerFrame = ((sampleRate * frameDurationMs) / 1000) * channels
-            val maxFrames = ((windowDurationMs / frameDurationMs) + 8).toInt().coerceAtMost(1500)
-            val rmsFrames = FloatArray(maxFrames)
-            var frameIndex = 0
-
-            var sumSquares = 0.0
-            var sampleCount = 0
-
-            val bufferInfo = MediaCodec.BufferInfo()
-            var isInputEOS = false
-            var isOutputEOS = false
-            val endUs = (startMs + windowDurationMs) * 1000L
-
-            while (!isOutputEOS && frameIndex < maxFrames) {
-                if (!isInputEOS) {
-                    val inIndex = codec.dequeueInputBuffer(5000L)
-                    if (inIndex >= 0) {
-                        val inputBuffer = codec.getInputBuffer(inIndex)
-                        if (inputBuffer != null) {
-                            val sampleSize = extractor.readSampleData(inputBuffer, 0)
-                            val presentationTimeUs = extractor.sampleTime
-                            if (sampleSize < 0 || presentationTimeUs > endUs) {
-                                codec.queueInputBuffer(
-                                    inIndex, 0, 0, 0L,
-                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                                )
-                                isInputEOS = true
-                            } else {
-                                codec.queueInputBuffer(
-                                    inIndex, 0, sampleSize, presentationTimeUs, 0
-                                )
-                                extractor.advance()
-                            }
-                        }
-                    }
-                }
-
-                val outIndex = codec.dequeueOutputBuffer(bufferInfo, 5000L)
-                if (outIndex >= 0) {
-                    val outputBuffer = codec.getOutputBuffer(outIndex)
-                    if (outputBuffer != null && bufferInfo.size > 0) {
-                        outputBuffer.position(bufferInfo.offset)
-                        outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-                        val shortBuffer = outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
-
-                        // Downsample by step 6 for ultra-fast decoding while preserving accurate RMS envelope
-                        val step = 6
-                        var idx = 0
-                        val limit = shortBuffer.remaining()
-                        while (idx < limit && frameIndex < maxFrames) {
-                            val sample = shortBuffer.get(idx) / 32768.0
-                            sumSquares += sample * sample
-                            sampleCount += step
-                            if (sampleCount >= samplesPerFrame) {
-                                val rms = sqrt(sumSquares / (sampleCount / step)).toFloat()
-                                rmsFrames[frameIndex++] = rms
-                                sumSquares = 0.0
-                                sampleCount = 0
-                            }
-                            idx += step
-                        }
-                    }
-                    codec.releaseOutputBuffer(outIndex, false)
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        isOutputEOS = true
-                    }
-                } else if (outIndex == MediaCodec.INFO_TRY_AGAIN_LATER && isInputEOS) {
-                    break
-                }
-            }
-
-            return rmsFrames.copyOf(frameIndex)
-        } catch (e: Exception) {
-            return FloatArray(0)
-        } finally {
-            try {
-                codec?.stop()
-                codec?.release()
-            } catch (_: Exception) {}
-            try {
-                extractor.release()
-            } catch (_: Exception) {}
-        }
-    }
-
-    /**
      * Estimates BPM in range [76 .. 172] using onset-strength envelope autocorrelation
      * with automatic half-time -> double-time octave folding for energetic pop/electronic tracks.
      */
@@ -729,13 +501,45 @@ class AudioAnalysisEngine(private val context: Context) {
                     cueInMs = obj.getLong("cueInMs"),
                     mixOutMs = obj.getLong("mixOutMs"),
                     midMixOutMs = safeMid,
+                    midMixConfidence = obj.optDouble("midMixConfidence", 0.0).toFloat()
+                        .takeIf { it.isFinite() }?.coerceIn(0f, 1f) ?: 0f,
                     deepCueInMs = obj.optLong("deepCueInMs", obj.getLong("cueInMs")),
                     crossfadeDurationMs = obj.getLong("crossfadeDurationMs"),
-                    durationMs = dur
+                    durationMs = dur,
+                    beatSections = readBeatSections(obj.optJSONArray("beats")),
+                    vocalSections = readVocalSections(obj.optJSONArray("vocals"))
                 )
                 memoryCache[item.songId] = item
             }
         } catch (_: Exception) {}
+    }
+
+    private fun readBeatSections(array: JSONArray?): List<BeatSection> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val obj = array.getJSONObject(index)
+            val bpm = obj.getDouble("bpm").toFloat()
+            val confidence = obj.getDouble("confidence").toFloat()
+            val start = obj.getLong("start")
+            val end = obj.getLong("end")
+            if (!bpm.isFinite() || bpm <= 0 || !confidence.isFinite() || end <= start) null
+            else {
+                val times = obj.getJSONArray("times")
+                BeatSection(start, end, bpm, confidence.coerceIn(0f, 1f),
+                    (0 until times.length()).map { times.getLong(it) }.filter { it in start..end }.distinct().sorted())
+            }
+        }
+    }
+
+    private fun readVocalSections(array: JSONArray?): List<VocalSection> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val obj = array.getJSONObject(index)
+            val score = obj.getDouble("score").toFloat()
+            val start = obj.getLong("start")
+            val end = obj.getLong("end")
+            if (!score.isFinite() || end <= start) null else VocalSection(start, end, score.coerceIn(0f, 1f))
+        }
     }
 
     /**
@@ -758,9 +562,22 @@ class AudioAnalysisEngine(private val context: Context) {
                             put("cueInMs", item.cueInMs)
                             put("mixOutMs", item.mixOutMs)
                             put("midMixOutMs", item.midMixOutMs)
+                            put("midMixConfidence", item.midMixConfidence)
                             put("deepCueInMs", item.deepCueInMs)
                             put("crossfadeDurationMs", item.crossfadeDurationMs)
                             put("durationMs", item.durationMs)
+                            put("beats", JSONArray().apply {
+                                item.beatSections.forEach { section -> put(JSONObject().apply {
+                                    put("start", section.startMs); put("end", section.endMs)
+                                    put("bpm", section.bpm); put("confidence", section.confidence)
+                                    put("times", JSONArray(section.beatsMs))
+                                }) }
+                            })
+                            put("vocals", JSONArray().apply {
+                                item.vocalSections.forEach { section -> put(JSONObject().apply {
+                                    put("start", section.startMs); put("end", section.endMs); put("score", section.score)
+                                }) }
+                            })
                         }
                         array.put(obj)
                     }

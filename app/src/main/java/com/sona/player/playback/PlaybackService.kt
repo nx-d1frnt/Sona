@@ -28,7 +28,7 @@ class PlaybackService : MediaSessionService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val session = MediaSession.Builder(this, engine.activeDeck)
+        val session = MediaSession.Builder(this, engine.sessionPlayer)
             .setSessionActivity(pendingIntent)
             .build()
 
