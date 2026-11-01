@@ -7,12 +7,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,7 +33,6 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -44,7 +43,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -86,51 +84,98 @@ fun NowPlayingScreen(
         0f
     }
 
-    val artworkCornerRadius by animateDpAsState(
-        targetValue = if (isPlaying) 32.dp else 24.dp,
-        label = "ArtworkCornerRadius"
-    )
-
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(Color.Black)
     ) {
-        // Full screen background artwork with high-radius blur
+        // 1. Полноэкранная резкая обложка альбома на весь экран
         if (song.albumArtUri != null) {
             AsyncImage(
                 model = song.albumArtUri,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(50.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    modifier = Modifier.size(120.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+            }
+        }
+
+        // 2. Блюр этой же обложки снизу перед элементами управления (с мягким градиентным затуханием)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxSize(0.55f)
+                .align(Alignment.BottomCenter)
+        ) {
+            // Размытая копия обложки только под областью управления
+            if (song.albumArtUri != null) {
+                AsyncImage(
+                    model = song.albumArtUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alignment = Alignment.BottomCenter,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(35.dp)
+                )
+            }
+
+            // Плавный градиент-затемнение от прозрачного к плотному темному фону для идеальной читаемости
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.Black.copy(alpha = 0.5f),
+                                Color.Black.copy(alpha = 0.85f),
+                                Color.Black.copy(alpha = 0.96f)
+                            )
+                        )
+                    )
             )
         }
 
-        // Gradient overlay fading from subtle tint at top to dark surface at bottom
+        // Верхний градиент для читаемости кнопки сворачивания и надписи
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
+                .height(120.dp)
+                .align(Alignment.TopCenter)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.75f),
-                            MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
+                            Color.Black.copy(alpha = 0.65f),
+                            Color.Transparent
                         )
                     )
                 )
         )
 
+        // 3. UI элементы
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Header bar
+            // Верхняя панель (Header bar)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -141,6 +186,7 @@ fun NowPlayingScreen(
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
                         contentDescription = "Collapse player",
+                        tint = Color.White,
                         modifier = Modifier.size(32.dp)
                     )
                 }
@@ -150,7 +196,7 @@ fun NowPlayingScreen(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = Color.White.copy(alpha = 0.85f),
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f)
                 )
@@ -158,34 +204,10 @@ fun NowPlayingScreen(
                 Spacer(modifier = Modifier.size(48.dp))
             }
 
-            // Expressive Artwork Card
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.85f)
-                    .aspectRatio(1f)
-                    .shadow(elevation = 20.dp, shape = RoundedCornerShape(artworkCornerRadius))
-                    .clip(RoundedCornerShape(artworkCornerRadius))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                contentAlignment = Alignment.Center
-            ) {
-                if (song.albumArtUri != null) {
-                    AsyncImage(
-                        model = song.albumArtUri,
-                        contentDescription = "Song artwork",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Rounded.MusicNote,
-                        contentDescription = null,
-                        modifier = Modifier.size(100.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
+            // Пространство для открытого просмотра полноэкранной обложки
+            Spacer(modifier = Modifier.weight(1f))
 
-            // Song Info & Controls
+            // Блок информации о треке и элементы управления
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -194,27 +216,28 @@ fun NowPlayingScreen(
                     text = song.title,
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
+                    color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 Text(
                     text = "${song.artist} • ${song.album}",
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = Color.White.copy(alpha = 0.75f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(28.dp))
+                Spacer(modifier = Modifier.height(24.dp))
 
-                // Progress Slider
+                // Слайдер прогресса
                 Slider(
                     value = progress,
                     onValueChange = { isUserSeeking = it },
@@ -226,7 +249,7 @@ fun NowPlayingScreen(
                     colors = SliderDefaults.colors(
                         thumbColor = MaterialTheme.colorScheme.primary,
                         activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                        inactiveTrackColor = Color.White.copy(alpha = 0.25f)
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -245,18 +268,18 @@ fun NowPlayingScreen(
                     Text(
                         text = formatTime(currentDisplayMs),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color.White.copy(alpha = 0.7f)
                     )
                     Text(
                         text = formatTime(durationMs),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = Color.White.copy(alpha = 0.7f)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                // Playback Controls
+                // Кнопки управления воспроизведением
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
@@ -266,7 +289,7 @@ fun NowPlayingScreen(
                         Icon(
                             imageVector = Icons.Rounded.Shuffle,
                             contentDescription = "Shuffle",
-                            tint = if (isShuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            tint = if (isShuffle) MaterialTheme.colorScheme.primary else Color.White.copy(alpha = 0.7f)
                         )
                     }
 
@@ -277,6 +300,7 @@ fun NowPlayingScreen(
                         Icon(
                             imageVector = Icons.Rounded.SkipPrevious,
                             contentDescription = "Previous",
+                            tint = Color.White,
                             modifier = Modifier.size(36.dp)
                         )
                     }
@@ -304,6 +328,7 @@ fun NowPlayingScreen(
                         Icon(
                             imageVector = Icons.Rounded.SkipNext,
                             contentDescription = "Next",
+                            tint = Color.White,
                             modifier = Modifier.size(36.dp)
                         )
                     }
@@ -312,7 +337,7 @@ fun NowPlayingScreen(
                         val (icon, tint) = when (repeatMode) {
                             Player.REPEAT_MODE_ONE -> Icons.Rounded.RepeatOne to MaterialTheme.colorScheme.primary
                             Player.REPEAT_MODE_ALL -> Icons.Rounded.Repeat to MaterialTheme.colorScheme.primary
-                            else -> Icons.Rounded.Repeat to MaterialTheme.colorScheme.onSurfaceVariant
+                            else -> Icons.Rounded.Repeat to Color.White.copy(alpha = 0.7f)
                         }
                         Icon(
                             imageVector = icon,
@@ -323,7 +348,7 @@ fun NowPlayingScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
