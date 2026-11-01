@@ -362,14 +362,14 @@ fun NowPlayingScreen(
                 val showAutomixBanner = automixState.isEnabled &&
                     (automixState.isTransitioning || progress >= automixZoneFraction) &&
                     nextTrack != null &&
-                    nextTrack.id != currentSong?.id
+                    nextTrack.id != song.id
 
                 AnimatedContent(
                     targetState = showAutomixBanner,
                     transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
                     label = "AutomixBannerTransition"
                 ) { showBanner ->
-                    if (showBanner && nextTrack != null && nextTrack.id != currentSong?.id) {
+                    if (showBanner && nextTrack != null && nextTrack.id != song.id) {
                         val bpmText = automixState.nextMatchedAnalysis?.bpm?.roundToInt()
                             ?: automixState.currentAnalysis?.bpm?.roundToInt()
 
