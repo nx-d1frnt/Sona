@@ -5,8 +5,13 @@ import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import com.sona.player.data.model.Song
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -31,7 +36,10 @@ class AudioAnalysisEngine(private val context: Context) {
 
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
     private val cacheFile = File(context.filesDir, "sona_automix_analysis_v5.json")
+    private val tempCacheFile = File(context.filesDir, "sona_automix_analysis_v5.json.tmp")
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
+    private val cacheSaveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val cacheWriteMutex = Mutex()
 
     init {
         loadCacheFromDisk()
@@ -54,7 +62,7 @@ class AudioAnalysisEngine(private val context: Context) {
         }
 
         memoryCache[song.id] = analysis
-        saveCacheToDiskAsync()
+        scheduleSaveCacheToDisk()
         return analysis
     }
 
@@ -702,8 +710,12 @@ class AudioAnalysisEngine(private val context: Context) {
 
     private fun loadCacheFromDisk() {
         try {
-            if (!cacheFile.exists()) return
-            val jsonStr = cacheFile.readText()
+            val sourceFile = when {
+                cacheFile.exists() && cacheFile.length() > 2L -> cacheFile
+                tempCacheFile.exists() && tempCacheFile.length() > 2L -> tempCacheFile
+                else -> return
+            }
+            val jsonStr = sourceFile.readText()
             val array = JSONArray(jsonStr)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
@@ -726,24 +738,38 @@ class AudioAnalysisEngine(private val context: Context) {
         } catch (_: Exception) {}
     }
 
-    private suspend fun saveCacheToDiskAsync() = withContext(Dispatchers.IO) {
-        try {
-            val array = JSONArray()
-            for (item in memoryCache.values) {
-                val obj = JSONObject().apply {
-                    put("songId", item.songId)
-                    put("bpm", item.bpm.toDouble())
-                    put("energy", item.energy.toDouble())
-                    put("cueInMs", item.cueInMs)
-                    put("mixOutMs", item.mixOutMs)
-                    put("midMixOutMs", item.midMixOutMs)
-                    put("deepCueInMs", item.deepCueInMs)
-                    put("crossfadeDurationMs", item.crossfadeDurationMs)
-                    put("durationMs", item.durationMs)
-                }
-                array.put(obj)
+    /**
+     * Saves the analysis cache to disk on an independent non-cancellable IO scope using atomic
+     * temp-file replacement so skipping tracks or cancelling [analysisJob] never aborts or corrupts the file.
+     */
+    private fun scheduleSaveCacheToDisk() {
+        cacheSaveScope.launch {
+            cacheWriteMutex.withLock {
+                try {
+                    val snapshot = ArrayList(memoryCache.values)
+                    val array = JSONArray()
+                    for (item in snapshot) {
+                        val safeBpm = if (item.bpm.isFinite()) item.bpm.toDouble() else 120.0
+                        val safeEnergy = if (item.energy.isFinite()) item.energy.toDouble() else 0.6
+                        val obj = JSONObject().apply {
+                            put("songId", item.songId)
+                            put("bpm", safeBpm)
+                            put("energy", safeEnergy)
+                            put("cueInMs", item.cueInMs)
+                            put("mixOutMs", item.mixOutMs)
+                            put("midMixOutMs", item.midMixOutMs)
+                            put("deepCueInMs", item.deepCueInMs)
+                            put("crossfadeDurationMs", item.crossfadeDurationMs)
+                            put("durationMs", item.durationMs)
+                        }
+                        array.put(obj)
+                    }
+                    tempCacheFile.writeText(array.toString())
+                    if (!tempCacheFile.renameTo(cacheFile)) {
+                        cacheFile.writeText(array.toString())
+                    }
+                } catch (_: Exception) {}
             }
-            cacheFile.writeText(array.toString())
-        } catch (_: Exception) {}
+        }
     }
 }

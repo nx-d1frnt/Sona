@@ -530,12 +530,21 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 delay(250)
             }
 
-            _playerState.value = _playerState.value.copy(
-                automix = _playerState.value.automix.copy(isAnalyzing = true)
-            )
+            val maxLookahead = (currentIndex + 5).coerceAtMost(playlist.lastIndex)
+            val anyNeedsDecoding = (currentIndex..maxLookahead).any { idx ->
+                val s = playlist.getOrNull(idx)
+                s != null && analysisEngine.getCached(s.id) == null
+            }
+
+            if (anyNeedsDecoding) {
+                _playerState.value = _playerState.value.copy(
+                    automix = _playerState.value.automix.copy(isAnalyzing = true)
+                )
+            }
 
             // 1. Analyze current song first so the UI gets its exact BPM & Automix Zone right away
-            val curAnalysis = analysisEngine.analyzeSong(currentSong)
+            val curAnalysis = analysisEngine.getCached(currentSong.id)
+                ?: analysisEngine.analyzeSong(currentSong)
             rebuildSavedTransitions(currentIndex)
             _playerState.value = _playerState.value.copy(
                 automix = _playerState.value.automix.copy(
@@ -545,15 +554,17 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 )
             )
 
-            // 2. Analyze the next 5 candidate tracks in the queue with gentle pacing
-            val maxLookahead = (currentIndex + 5).coerceAtMost(playlist.lastIndex)
+            // 2. Analyze the next 5 candidate tracks in the queue (instant if cached on disk!)
             for (i in (currentIndex + 1)..maxLookahead) {
                 if (!isActive) return@launch
                 while (crossfadeJob?.isActive == true && isActive) {
                     delay(250)
                 }
                 val candidate = playlist.getOrNull(i) ?: continue
-                analysisEngine.analyzeSong(candidate)
+                val wasCached = analysisEngine.getCached(candidate.id) != null
+                if (!wasCached) {
+                    analysisEngine.analyzeSong(candidate)
+                }
                 // Update smart match incrementally as candidates finish analyzing
                 if (_playerState.value.automix.isEnabled && crossfadeJob?.isActive != true) {
                     applyOneStepAheadMatch(currentIndex, curAnalysis)
@@ -566,7 +577,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                         )
                     )
                 }
-                delay(120)
+                if (!wasCached) {
+                    delay(120)
+                }
             }
 
             rebuildSavedTransitions(currentIndex)
@@ -578,23 +591,26 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 )
             )
 
-            // 3. Continue indexing a few further tracks in the queue at low priority
-            val furtherLimit = (currentIndex + 10).coerceAtMost(playlist.lastIndex)
+            // 3. Continue indexing further tracks in the queue at low priority
+            val furtherLimit = (currentIndex + 12).coerceAtMost(playlist.lastIndex)
             for (i in (maxLookahead + 1)..furtherLimit) {
                 if (!isActive) return@launch
                 while (crossfadeJob?.isActive == true && isActive) {
                     delay(300)
                 }
                 val candidate = playlist.getOrNull(i) ?: continue
-                analysisEngine.analyzeSong(candidate)
-                rebuildSavedTransitions(currentIndex)
-                _playerState.value = _playerState.value.copy(
-                    automix = _playerState.value.automix.copy(
-                        analyzedTracks = analysisEngine.getAllCached(),
-                        savedTransitions = savedTransitions.toMap()
+                val wasCached = analysisEngine.getCached(candidate.id) != null
+                if (!wasCached) {
+                    analysisEngine.analyzeSong(candidate)
+                    rebuildSavedTransitions(currentIndex)
+                    _playerState.value = _playerState.value.copy(
+                        automix = _playerState.value.automix.copy(
+                            analyzedTracks = analysisEngine.getAllCached(),
+                            savedTransitions = savedTransitions.toMap()
+                        )
                     )
-                )
-                delay(250)
+                    delay(200)
+                }
             }
         }
     }
