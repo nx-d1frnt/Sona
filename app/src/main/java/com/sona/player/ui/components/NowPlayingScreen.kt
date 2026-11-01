@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
+import com.sona.player.automix.TransitionPlanner
 import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.automix.ShuffleMode
@@ -144,8 +145,14 @@ fun NowPlayingScreen(
         automixState.nextMatchedAnalysis?.takeIf { it.songId == nextId }
             ?: nextId?.let { automixState.analyzedTracks[it] }
     }
+    val transitionPreview = remember(activeTrackAnalysis, activeNextAnalysis, automixState.mode) {
+        if (activeTrackAnalysis != null && activeNextAnalysis != null) {
+            TransitionPlanner.plan(activeTrackAnalysis, activeNextAnalysis, automixState.mode)
+        } else null
+    }
     val targetZoneFraction = if (automixState.isEnabled) {
-        activeTrackAnalysis?.effectiveZoneFraction(automixState.mode, activeNextAnalysis)
+        transitionPreview?.let { (it.mixOutMs.toFloat() / activeTrackAnalysis!!.durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f) }
+            ?: activeTrackAnalysis?.effectiveZoneFraction(automixState.mode, activeNextAnalysis)
             ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) 0.56f else 0.82f
     } else {
         1.0f
@@ -525,7 +532,8 @@ fun NowPlayingScreen(
                             " ($sign$pct%)"
                         } else ""
                         val resolvedMode = activeTrackAnalysis.resolveEffectiveMode(automixState.mode, activeNextAnalysis)
-                        val mixPointMs = activeTrackAnalysis.effectiveMixOutMs(automixState.mode, activeNextAnalysis)
+                        val mixPointMs = transitionPreview?.mixOutMs
+                            ?: activeTrackAnalysis.effectiveMixOutMs(automixState.mode, activeNextAnalysis)
                         val mixPointTag = when (automixState.mode) {
                             AutomixMode.AUTO_DJ -> {
                                 val autoKind = if (resolvedMode == AutomixMode.QUICK_MID_MIX) "MID" else "Mix"

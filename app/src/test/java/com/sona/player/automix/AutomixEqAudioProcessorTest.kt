@@ -5,6 +5,8 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -114,4 +116,83 @@ class AutomixEqAudioProcessorTest {
         val silence = ShortArray(48_000)
         assertArrayEquals(silence, process(processor, silence))
     }
+    @Test fun normalizationSurvivesTransitionResetWithoutChangingTrackLevel() {
+        val processor = processor(1)
+        processor.setNormalizationGain(0.5f, 0L)
+        val samples = ShortArray(1000) { 16000 }
+        val before = process(processor, samples)
+        assertTrue(kotlin.math.abs(before.last().toInt() - 8000) <= 2)
+        processor.resetEq()
+        assertArrayEquals(before, process(processor, samples))
+    }
+
+    @Test fun linkedLimiterProtectsBoostedSamplesAndPreservesStereoBalance() {
+        val processor = processor()
+        processor.setNormalizationGain(2f, 0L)
+        val samples = ShortArray(2000) { if (it % 2 == 0) 24000 else 12000 }
+        val output = process(processor, samples)
+        assertTrue(output.all { kotlin.math.abs(it.toInt()) <= (32767 * 0.951).toInt() })
+        assertEquals(2.0, output[output.size - 2].toDouble() / output.last(), 0.001)
+    }
+
+    @Test fun tempoEchoSupportsOneSecondDelayInsteadOfClampingToOldBufferSize() {
+        val processor = processor(1)
+        processor.configureEcho(1000f)
+        processor.updateOutgoingEq(0.2f, AutomixTransitionTool.ECHO_OUT)
+        val impulse = ShortArray(60_000)
+        impulse[0] = 24000
+        val output = process(processor, impulse)
+        assertTrue(output.copyOfRange(16_000, 32_000).all { kotlin.math.abs(it.toInt()) < 4 })
+        assertTrue(output.copyOfRange(48_000, 48_100).any { kotlin.math.abs(it.toInt()) > 50 })
+    }
+
+    @Test fun echoTailDrainsAtEofAndRetainsTheLastUnconsumedBuffer() {
+        val processor = processor(1)
+        processor.configureEcho(500f)
+        processor.updateOutgoingEq(0.2f, AutomixTransitionTool.ECHO_OUT)
+        val input = ByteBuffer.allocateDirect(4800 * 2).order(ByteOrder.nativeOrder())
+        input.putShort(24000)
+        repeat(4799) { input.putShort(0) }
+        input.flip()
+        processor.queueInput(input)
+        processor.queueEndOfStream()
+        val lastOrdinary = processor.output
+        assertEquals(4800 * 2, lastOrdinary.remaining())
+        assertFalse(processor.isEnded)
+        val tail = processor.output.order(ByteOrder.nativeOrder()).asShortBuffer()
+        assertTrue(tail.remaining() > 48_000)
+        val samples = ShortArray(tail.remaining()).also { tail.get(it) }
+        assertTrue(samples.any { kotlin.math.abs(it.toInt()) > 25 })
+        assertTrue(samples.takeLast(1000).all { kotlin.math.abs(it.toInt()) < 25 })
+        assertTrue(processor.isEnded)
+    }
+
+    @Test fun dryCutStopsFeedingNewAudioIntoEchoTail() {
+        val processor = processor(1)
+        processor.configureEcho(500f)
+        processor.updateOutgoingEq(0.6f, AutomixTransitionTool.ECHO_OUT)
+        // No earlier captured sound: fresh source samples after the cut must not create echoes.
+        val output = process(processor, ShortArray(60_000) { 12000 })
+        assertTrue(output.takeLast(10_000).all { kotlin.math.abs(it.toInt()) < 4 })
+    }
+
+    @Test fun disablingNormalizationCompletesRampAndReturnsToBitPerfectBypass() {
+        val processor = processor(1)
+        processor.setNormalizationGain(0.5f, 0L)
+        process(processor, ShortArray(1000) { 12000 })
+        processor.setNormalizationGain(1f, 1500L)
+        process(processor, ShortArray(96_000) { 12000 })
+        val samples = shortArrayOf(Short.MIN_VALUE, Short.MAX_VALUE, -1, 0, 1, 12345)
+        assertArrayEquals(samples, process(processor, samples))
+    }
+
+    @Test fun decoderResetKeepsConfiguredNormalizationForTheNextFormat() {
+        val processor = processor(1)
+        processor.setNormalizationGain(0.5f, 0L)
+        processor.reset()
+        processor.configure(AudioProcessor.AudioFormat(44_100, 1, C.ENCODING_PCM_16BIT))
+        processor.flush()
+        assertTrue(kotlin.math.abs(process(processor, ShortArray(100) { 16000 }).last().toInt() - 8000) <= 2)
+    }
+
 }

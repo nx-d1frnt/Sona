@@ -58,6 +58,10 @@ internal object MusicalCueSelector {
     fun tempoRatios(from: TrackAnalysis, to: TrackAnalysis, mode: AutomixMode): Pair<Float, Float> {
         val outPosition = from.effectiveMixOutMs(mode, to)
         val inPosition = to.effectiveCueInMs(mode, from.energy, from)
+        return tempoRatiosAt(from, to, outPosition, inPosition)
+    }
+
+    fun tempoRatiosAt(from: TrackAnalysis, to: TrackAnalysis, outPosition: Long, inPosition: Long): Pair<Float, Float> {
         val outBeat = beatSection(from, outPosition) ?: return 1f to 1f
         val inBeat = beatSection(to, inPosition) ?: return 1f to 1f
         val ratios = AutomixQueueSelector.computeTempoSyncRatios(outBeat.bpm, inBeat.bpm)

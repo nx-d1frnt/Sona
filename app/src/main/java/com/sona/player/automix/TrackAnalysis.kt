@@ -47,6 +47,18 @@ enum class AutomixTransitionTool(
     val shortBadge: String,
     val toolsSummary: String
 ) {
+    VOCAL_HANDOFF(
+        displayName = "Vocal Handoff", shortBadge = "Vocal Handoff",
+        toolsSummary = "Vocal Pause • Instrumental Intro • Level Match"
+    ),
+    BEAT_CUT(
+        displayName = "Short Beat Crossfade", shortBadge = "Beat Cut",
+        toolsSummary = "Measured Beat • Short Crossfade • Level Match"
+    ),
+    ECHO_OUT(
+        displayName = "Tempo Echo Out", shortBadge = "Echo Out",
+        toolsSummary = "Beat Delay • Dry Cut • Echo Tail • Level Match"
+    ),
     BASS_SWAP_DROP(
         displayName = "Club Bass Swap + LPF Sweep",
         shortBadge = "Bass Swap + LPF",
@@ -83,13 +95,15 @@ data class TrackAnalysis(
     val energy: Float,               // Normalized perceptual intensity (0.0f .. 1.0f)
     val cueInMs: Long,               // Smart phrase/beat-aligned entry point (skips intros/skits up to 24s)
     val mixOutMs: Long,              // Optimal point in the outro (71%..89%) to start crossfading
-    val crossfadeDurationMs: Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
+    val crossfadeDurationMs:  Long,   // Recommended overlap duration (e.g. 8500..13000 ms)
     val durationMs: Long,
     val midMixOutMs: Long = (durationMs * 0.56f).toLong(), // Optimal post-chorus breakdown past the midpoint (50%..67%)
     val deepCueInMs: Long = cueInMs, // Deeper hook/drop entry point for explicit DJ mixes
     val midMixConfidence: Float = 0f, // Heuristic strength of a sustained drop; 0 for fallback data
     val beatSections: List<BeatSection> = emptyList(),
-    val vocalSections: List<VocalSection> = emptyList()
+    val vocalSections: List<VocalSection> = emptyList(),
+    val loudnessSections: List<LoudnessSection> = emptyList(),
+    val loudnessAnalyzed: Boolean = false
 ) {
     /**
      * Resolves [AutomixMode.AUTO_DJ] into either [AutomixMode.QUICK_MID_MIX] or [AutomixMode.CLASSIC_OUTRO]

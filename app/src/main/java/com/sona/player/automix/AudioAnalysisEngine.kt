@@ -45,21 +45,37 @@ class AudioAnalysisEngine(private val context: Context) {
 
     fun getAllCached(): Map<Long, TrackAnalysis> = HashMap(memoryCache)
 
-    suspend fun analyzeSong(song: Song): TrackAnalysis {
-        memoryCache[song.id]?.let { return it }
+    fun needsAnalysis(songId: Long): Boolean = memoryCache[songId]?.loudnessAnalyzed != true
+
+    suspend fun analyzeSong(song: Song, force: Boolean = false): TrackAnalysis {
+        memoryCache[song.id]?.takeIf { !force && it.loudnessAnalyzed }?.let { return it }
 
         val analysis = codecSemaphore.withPermit {
-            memoryCache[song.id]?.let { return@withPermit it }
+            memoryCache[song.id]?.takeIf { !force && it.loudnessAnalyzed }?.let { return@withPermit it }
+            val existing = if (force) null else memoryCache[song.id]
             withContext(Dispatchers.Default) {
                 withTimeoutOrNull(20_000L) {
-                    decodeAndAnalyze(song)
-                } ?: createFallbackAnalysis(song)
+                    if (existing == null) decodeAndAnalyze(song) else enrichLoudness(song, existing)
+                } ?: existing?.copy(loudnessAnalyzed = true) ?: createFallbackAnalysis(song)
+            }.also {
+                memoryCache[song.id] = it
+                scheduleSaveCacheToDisk()
             }
         }
 
-        memoryCache[song.id] = analysis
-        scheduleSaveCacheToDisk()
         return analysis
+    }
+
+    // Extend v7 entries in place: cached beats/vocals survive and YAMNet is not run again.
+    private suspend fun enrichLoudness(song: Song, existing: TrackAnalysis): TrackAnalysis {
+        val duration = existing.durationMs
+        val windows = listOf(
+            windowDecoder.decode(song, 0L, minOf(24_000L, duration * 35 / 100)),
+            windowDecoder.decode(song, (duration * 0.48).toLong(), minOf(14_000L, duration / 4)),
+            windowDecoder.decode(song, (duration - minOf(38_000L, duration * 28 / 100)).coerceAtLeast(0L),
+                minOf(38_000L, duration * 28 / 100))
+        )
+        return existing.copy(loudnessSections = windows.mapNotNull { LoudnessAnalyzer.analyze(it) }, loudnessAnalyzed = true)
     }
 
     private suspend fun decodeAndAnalyze(song: Song): TrackAnalysis {
@@ -167,6 +183,8 @@ class AudioAnalysisEngine(private val context: Context) {
             midMixConfidence = midPoint.confidence,
             beatSections = beats,
             vocalSections = vocals,
+            loudnessSections = windows.mapNotNull { LoudnessAnalyzer.analyze(it) },
+            loudnessAnalyzed = true,
             deepCueInMs = deepCueInMs,
             crossfadeDurationMs = recommendedMixDurationMs,
             durationMs = durationMs
@@ -471,6 +489,7 @@ class AudioAnalysisEngine(private val context: Context) {
             mixOutMs = mixOut,
             midMixOutMs = midMixOut,
             crossfadeDurationMs = mixDuration,
+            loudnessAnalyzed = true,
             durationMs = duration
         )
     }
@@ -507,7 +526,9 @@ class AudioAnalysisEngine(private val context: Context) {
                     crossfadeDurationMs = obj.getLong("crossfadeDurationMs"),
                     durationMs = dur,
                     beatSections = readBeatSections(obj.optJSONArray("beats")),
-                    vocalSections = readVocalSections(obj.optJSONArray("vocals"))
+                    vocalSections = readVocalSections(obj.optJSONArray("vocals")),
+                    loudnessSections = readLoudnessSections(obj.optJSONArray("loudness")),
+                    loudnessAnalyzed = obj.optBoolean("loudnessAnalyzed", false)
                 )
                 memoryCache[item.songId] = item
             }
@@ -542,6 +563,19 @@ class AudioAnalysisEngine(private val context: Context) {
         }
     }
 
+    private fun readLoudnessSections(array: JSONArray?): List<LoudnessSection> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index ->
+            val obj = array.getJSONObject(index)
+            val lufs = obj.getDouble("lufs").toFloat()
+            val peak = obj.getDouble("peak").toFloat()
+            val start = obj.getLong("start")
+            val end = obj.getLong("end")
+            if (!lufs.isFinite() || !peak.isFinite() || peak <= 0f || end <= start) null
+            else LoudnessSection(start, end, lufs, peak)
+        }
+    }
+
     /**
      * Saves the analysis cache to disk on an independent non-cancellable IO scope using atomic
      * temp-file replacement so skipping tracks or cancelling [analysisJob] never aborts or corrupts the file.
@@ -571,6 +605,13 @@ class AudioAnalysisEngine(private val context: Context) {
                                     put("start", section.startMs); put("end", section.endMs)
                                     put("bpm", section.bpm); put("confidence", section.confidence)
                                     put("times", JSONArray(section.beatsMs))
+                                }) }
+                            })
+                            put("loudnessAnalyzed", item.loudnessAnalyzed)
+                            put("loudness", JSONArray().apply {
+                                item.loudnessSections.forEach { section -> put(JSONObject().apply {
+                                    put("start", section.startMs); put("end", section.endMs)
+                                    put("lufs", section.lufs); put("peak", section.samplePeak)
                                 }) }
                             })
                             put("vocals", JSONArray().apply {

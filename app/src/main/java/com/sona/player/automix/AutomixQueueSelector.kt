@@ -59,7 +59,7 @@ object AutomixQueueSelector {
             bpmOut = currentAnalysis.bpm,
             bpmIn = chosenAnalysis.bpm
         )
-        val tool = selectOptimalTransitionTool(currentAnalysis, chosenAnalysis)
+        val tool = TransitionPlanner.plan(currentAnalysis, chosenAnalysis, AutomixMode.AUTO_DJ).tool
 
         return MatchResult(
             candidateIndexInQueue = bestIndex,
@@ -145,20 +145,9 @@ object AutomixQueueSelector {
     ): SavedTransition {
         val rawScore = computeCompatibilityScore(fromAnalysis, toAnalysis)
         val scorePct = (rawScore * 100f).roundToInt().coerceIn(62, 99)
-        val tool = selectOptimalTransitionTool(fromAnalysis, toAnalysis)
-        val (_, inRatio) = MusicalCueSelector.tempoRatios(fromAnalysis, toAnalysis, mode)
-        val syncPct = ((inRatio - 1.0f) * 100f).roundToInt()
-        val resolvedMode = fromAnalysis.resolveEffectiveMode(mode, toAnalysis)
-        val targetCueInMs = toAnalysis.effectiveCueInMs(
-            mode = mode,
-            outgoingEnergy = fromAnalysis.energy,
-            outgoingAnalysis = fromAnalysis
-        )
-        val effectiveOverlapMs = if (resolvedMode == AutomixMode.QUICK_MID_MIX) {
-            8500L
-        } else {
-            fromAnalysis.crossfadeDurationMs
-        }
+        val plan = TransitionPlanner.plan(fromAnalysis, toAnalysis, mode)
+        val tool = plan.tool
+        val syncPct = ((plan.incomingTempoRatio - 1.0f) * 100f).roundToInt()
 
         return SavedTransition(
             fromSongId = fromSongId,
@@ -166,8 +155,8 @@ object AutomixQueueSelector {
             fromBpm = fromAnalysis.bpm,
             toBpm = toAnalysis.bpm,
             matchScorePercent = scorePct,
-            overlapDurationMs = effectiveOverlapMs,
-            cueInMs = targetCueInMs,
+            overlapDurationMs = plan.durationMs,
+            cueInMs = plan.cueInMs,
             transitionTool = tool,
             transitionStyle = "${tool.shortBadge} (${tool.toolsSummary})",
             tempoSyncPercent = syncPct,

@@ -12,6 +12,9 @@ data class BeatSection(
 /** YAMNet class score, not a calibrated probability that a segment is instrumental. */
 data class VocalSection(val startMs: Long, val endMs: Long, val score: Float)
 
+/** Local mono loudness estimate and observed sample peak, not full-track integrated LUFS. */
+data class LoudnessSection(val startMs: Long, val endMs: Long, val lufs: Float, val samplePeak: Float)
+
 internal data class AudioWindow(val startMs: Long, val samples: FloatArray, val sampleRate: Int = 16_000) {
     val endMs: Long get() = startMs + samples.size * 1000L / sampleRate
 

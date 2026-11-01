@@ -17,6 +17,10 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.MediaSession
+import com.sona.player.automix.LoudnessNormalizer
+import com.sona.player.automix.TransitionEnvelopes
+import com.sona.player.automix.TransitionPlan
+import com.sona.player.automix.TransitionPlanner
 import com.sona.player.automix.MusicalCueSelector
 import com.sona.player.automix.AudioAnalysisEngine
 import com.sona.player.automix.AutomixEqAudioProcessor
@@ -28,6 +32,7 @@ import com.sona.player.automix.SavedTransition
 import com.sona.player.automix.ShuffleMode
 import com.sona.player.automix.TrackAnalysis
 import com.sona.player.data.model.Song
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,9 +44,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 
 /**
  * Dual-Deck ExoPlayer engine powering Sona's intelligent background Automix:
@@ -66,6 +68,18 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val analysisEngine = AudioAnalysisEngine(context)
+    fun needsLibraryAnalysis(songId: Long) = analysisEngine.needsAnalysis(songId)
+
+    suspend fun analyzeLibrarySong(song: Song, force: Boolean) {
+        analysisEngine.analyzeSong(song, force)
+        val state = _playerState.value
+        _playerState.value = state.copy(automix = state.automix.copy(
+            currentAnalysis = state.currentSong?.let { analysisEngine.getCached(it.id) },
+            nextMatchedAnalysis = playlist.getOrNull(state.currentIndex + 1)?.let { analysisEngine.getCached(it.id) },
+            analyzedTracks = analysisEngine.getAllCached()
+        ))
+    }
+
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     private val media3AudioAttrs = AudioAttributes.Builder()
@@ -107,10 +121,24 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         return if (deck === deckA) eqProcessorA else eqProcessorB
     }
 
+    private fun applyTrackNormalization(deck: ExoPlayer, songId: Long?, immediate: Boolean = false) {
+        val gain = if (_playerState.value.automix.isEnabled) LoudnessNormalizer.gain(songId?.let { analysisEngine.getCached(it) }) else 1f
+        getEqForDeck(deck).setNormalizationGain(gain, if (immediate) 0L else 1500L)
+    }
+
+    private fun restoreEchoQueue() {
+        val deck = echoTailDeck ?: return
+        echoTailDeck = null
+        if (deck.mediaItemCount < playlist.size) {
+            deck.addMediaItems(buildMediaItems(playlist.drop(deck.mediaItemCount)))
+        }
+    }
+
     var activeDeck: ExoPlayer = deckA
         private set
     private var inactiveDeck: ExoPlayer = deckB
     private var transitionIncomingDeck: ExoPlayer? = null
+    private var echoTailDeck: ExoPlayer? = null
 
     private val sessionDeckA: Player = buildSessionPlayer(deckA)
     private val sessionDeckB: Player = buildSessionPlayer(deckB)
@@ -251,6 +279,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
                 val currentIdx = deck.currentMediaItemIndex
                 val song = playlist.getOrNull(currentIdx)
+                applyTrackNormalization(deck, song?.id)
                 val duration = deck.duration.takeIf { it > 0 } ?: (song?.durationMs ?: 0L)
 
                 isPrebufferedForIndex = -1
@@ -328,6 +357,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         inactiveDeck.shuffleModeEnabled = false
         activeDeck.volume = 1.0f * duckMultiplier
         activeDeck.playbackParameters = PlaybackParameters.DEFAULT
+        applyTrackNormalization(activeDeck, playlist[safeIndex].id, immediate = true)
         activeDeck.setMediaItems(mediaItems, safeIndex, 0L)
         activeDeck.prepare()
         activeDeck.playWhenReady = canPlay
@@ -662,7 +692,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             val maxLookahead = (currentIndex + 5).coerceAtMost(playlist.lastIndex)
             val anyNeedsDecoding = (currentIndex..maxLookahead).any { idx ->
                 val s = playlist.getOrNull(idx)
-                s != null && analysisEngine.getCached(s.id) == null
+                s != null && analysisEngine.needsAnalysis(s.id)
             }
 
             if (anyNeedsDecoding) {
@@ -672,8 +702,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             }
 
             // 1. Analyze current song first so the UI gets its exact BPM & Automix Zone right away
-            val curAnalysis = analysisEngine.getCached(currentSong.id)
-                ?: analysisEngine.analyzeSong(currentSong)
+            val curAnalysis = analysisEngine.analyzeSong(currentSong)
             rebuildSavedTransitions(currentIndex)
             val initialNextSong = playlist.getOrNull(currentIndex + 1)
             val initialNextAnalysis = initialNextSong?.let { analysisEngine.getCached(it.id) }
@@ -694,7 +723,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     delay(250)
                 }
                 val candidate = playlist.getOrNull(i) ?: continue
-                val wasCached = analysisEngine.getCached(candidate.id) != null
+                val wasCached = !analysisEngine.needsAnalysis(candidate.id)
                 if (!wasCached) {
                     analysisEngine.analyzeSong(candidate)
                 }
@@ -743,7 +772,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     delay(300)
                 }
                 val candidate = playlist.getOrNull(i) ?: continue
-                val wasCached = analysisEngine.getCached(candidate.id) != null
+                val wasCached = !analysisEngine.needsAnalysis(candidate.id)
                 if (!wasCached) {
                     analysisEngine.analyzeSong(candidate)
                     if (_playerState.value.shuffleMode == ShuffleMode.SMART && crossfadeJob?.isActive != true) {
@@ -853,6 +882,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         stopTrackingProgress()
         progressTrackerJob = scope.launch {
             while (isActive) {
+                if (crossfadeJob?.isActive != true) {
+                    applyTrackNormalization(activeDeck, _playerState.value.currentSong?.id)
+                }
                 val pos = activeDeck.currentPosition.coerceAtLeast(0L)
                 val dur = if (activeDeck.duration > 0) {
                     activeDeck.duration
@@ -890,9 +922,11 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         val curAnalysis = automix.currentAnalysis?.takeIf { it.songId == state.currentSong?.id }
             ?: state.currentSong?.let { analysisEngine.getCached(it.id) }
-        val nextAnalysis = analysisEngine.getCached(nextSong.id) ?: automix.nextMatchedAnalysis
+        val nextAnalysis = analysisEngine.getCached(nextSong.id)
+            ?: automix.nextMatchedAnalysis?.takeIf { it.songId == nextSong.id }
+        val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, automix.mode) else null
         val resolvedMode = curAnalysis?.resolveEffectiveMode(automix.mode, nextAnalysis) ?: automix.mode
-        val mixOutMs = curAnalysis?.effectiveMixOutMs(automix.mode, nextAnalysis)
+        val mixOutMs = plan?.mixOutMs ?: curAnalysis?.effectiveMixOutMs(automix.mode, nextAnalysis)
             ?: if (resolvedMode == AutomixMode.QUICK_MID_MIX) {
                 (durationMs * 0.56f).toLong().coerceAtLeast(15_000L)
             } else {
@@ -908,8 +942,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         // 2. Trigger the DJ Automix (High-Pass Blend -> Bass Swap -> Low-Pass Filter Sweep) when entering the Automix Zone
         if (positionMs >= mixOutMs - 300L && positionMs < durationMs - 2500L) {
-            val customDur = if (resolvedMode == AutomixMode.QUICK_MID_MIX) 8500L else null
-            startCrossfadeTransition(nextIndex, nextSong, customDurationMs = customDur)
+            startCrossfadeTransition(nextIndex, nextSong)
         }
     }
 
@@ -920,13 +953,15 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val curAnalysis = _playerState.value.automix.currentAnalysis
         val curEnergy = curAnalysis?.energy ?: 0.6f
         val mode = _playerState.value.automix.mode
-        val cueInMs = nextAnalysis?.effectiveCueInMs(mode, curEnergy, curAnalysis) ?: 0L
+        val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, mode) else null
+        val cueInMs = plan?.cueInMs ?: nextAnalysis?.effectiveCueInMs(mode, curEnergy, curAnalysis) ?: 0L
 
         val items = buildMediaItems(playlist)
         inactiveDeck.pause()
         inactiveDeck.volume = 0f
         inactiveDeck.playbackParameters = PlaybackParameters.DEFAULT
         getEqForDeck(inactiveDeck).resetEq()
+        getEqForDeck(inactiveDeck).setNormalizationGain(plan?.incomingGain ?: LoudnessNormalizer.gain(nextAnalysis), 0L)
         inactiveDeck.setMediaItems(items, nextIndex, cueInMs)
         inactiveDeck.prepare()
         isPrebufferedForIndex = nextIndex
@@ -959,29 +994,26 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         // Ensure incomingDeck is positioned at the smart entry point (in case analysis finished after prebuffer)
         val activeMode = _playerState.value.automix.mode
         val curEnergy = curAnalysis?.energy ?: 0.6f
-        val targetCueInMs = nextAnalysis?.effectiveCueInMs(activeMode, curEnergy, curAnalysis) ?: 0L
+        val plan = if (curAnalysis != null && nextAnalysis != null) {
+            TransitionPlanner.plan(curAnalysis, nextAnalysis, activeMode, customDurationMs,
+                if (customDurationMs != null) outgoingDeck.currentPosition else null)
+        } else TransitionPlan(
+            tool = AutomixTransitionTool.SILKY_WARM_ISOLATOR,
+            mixOutMs = outgoingDeck.currentPosition,
+            cueInMs = nextAnalysis?.effectiveCueInMs(activeMode, curEnergy, curAnalysis) ?: 0L,
+            durationMs = customDurationMs ?: 10_500L,
+            outgoingGain = LoudnessNormalizer.gain(curAnalysis), incomingGain = LoudnessNormalizer.gain(nextAnalysis)
+        )
+        val targetCueInMs = plan.cueInMs
         if (kotlin.math.abs(incomingDeck.currentPosition - targetCueInMs) > 80L) {
             incomingDeck.seekTo(nextIndex, targetCueInMs)
         }
-
-        val crossfadeDurationMs = customDurationMs
-            ?: (curAnalysis?.crossfadeDurationMs ?: 10_500L).coerceIn(8500L, 13_000L)
-
+        val crossfadeDurationMs = plan.durationMs
         activeTransitionTargetIndex = nextIndex
         transitionIncomingDeck = incomingDeck
-
-        // Automatically select the optimal DJ Transition Toolset & BPM Tempo Sync Ratios
-        val selectedTool = if (curAnalysis != null && nextAnalysis != null) {
-            AutomixQueueSelector.selectOptimalTransitionTool(curAnalysis, nextAnalysis)
-        } else {
-            AutomixTransitionTool.BASS_SWAP_DROP
-        }
-
-        val (outTempoRatio, inTempoRatio) = if (curAnalysis != null && nextAnalysis != null) {
-            MusicalCueSelector.tempoRatios(curAnalysis, nextAnalysis, activeMode)
-        } else {
-            1.0f to 1.0f
-        }
+        val selectedTool = plan.tool
+        val outTempoRatio = plan.outgoingTempoRatio
+        val inTempoRatio = plan.incomingTempoRatio
 
         // Lock this transition pair in savedTransitions so it is preserved
         if (outgoingSong != null && curAnalysis != null && nextAnalysis != null) {
@@ -993,6 +1025,12 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 toAnalysis = nextAnalysis,
                 mode = activeMode,
                 isCompleted = false
+            ).copy(
+                transitionTool = selectedTool,
+                transitionStyle = selectedTool.displayName,
+                overlapDurationMs = plan.durationMs,
+                cueInMs = plan.cueInMs,
+                tempoSyncPercent = ((plan.incomingTempoRatio - 1f) * 100f).roundToInt()
             )
             userLockedNextForSongId.add(outgoingSong.id)
         }
@@ -1019,7 +1057,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             // Keep the outgoing deck audible until the incoming decoder is ready.
             val ready = withTimeoutOrNull(8_000L) {
                 while (incomingDeck.playbackState != Player.STATE_READY) {
-                    pauseDeckBeforeEnd(outgoingDeck)
+                    if (selectedTool != AutomixTransitionTool.ECHO_OUT) pauseDeckBeforeEnd(outgoingDeck)
                     if (incomingDeck.playerError != null || incomingDeck.playbackState == Player.STATE_ENDED) {
                         return@withTimeoutOrNull false
                     }
@@ -1033,6 +1071,17 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 return@launch
             }
 
+            if (selectedTool == AutomixTransitionTool.ECHO_OUT) {
+                // Keep the outgoing media item alone until its DSP tail has drained at EOF.
+                echoTailDeck = outgoingDeck
+                val firstUpcoming = outgoingDeck.currentMediaItemIndex + 1
+                if (firstUpcoming < outgoingDeck.mediaItemCount) {
+                    outgoingDeck.removeMediaItems(firstUpcoming, outgoingDeck.mediaItemCount)
+                }
+            }
+            outgoingEq.configureEcho(plan.echoDelayMs)
+            outgoingEq.setNormalizationGain(plan.outgoingGain)
+            incomingEq.setNormalizationGain(plan.incomingGain, 0L)
             outgoingEq.updateOutgoingEq(0f, selectedTool)
             incomingEq.updateIncomingEq(0f, selectedTool)
             // Keep one common tempo throughout the overlap. Changing Sonic parameters
@@ -1043,7 +1092,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             // Start near a measured outgoing beat, rather than on an arbitrary 200ms UI tick.
             // This is source-time alignment; Android's two AudioTracks are not sample-clock locked.
             val plannedMixOut = if (customDurationMs == null) {
-                curAnalysis?.effectiveMixOutMs(activeMode, nextAnalysis) ?: outgoingDeck.currentPosition
+                plan.mixOutMs
             } else outgoingDeck.currentPosition
             val beatStart = if (curAnalysis != null && nextAnalysis != null &&
                 MusicalCueSelector.isMeasuredBeat(nextAnalysis, targetCueInMs)
@@ -1066,7 +1115,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 // Buffering must not advance the fade or silently promote an unready deck.
                 val playing = withTimeoutOrNull(8_000L) {
                     while (!incomingDeck.isPlaying) {
-                        pauseDeckBeforeEnd(outgoingDeck)
+                        if (selectedTool != AutomixTransitionTool.ECHO_OUT) pauseDeckBeforeEnd(outgoingDeck)
                         if (incomingDeck.playerError != null || incomingDeck.playbackState == Player.STATE_ENDED) {
                             return@withTimeoutOrNull false
                         }
@@ -1081,7 +1130,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 }
                 val t = (step.toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
 
-                pauseDeckBeforeEnd(outgoingDeck)
+                if (selectedTool != AutomixTransitionTool.ECHO_OUT) pauseDeckBeforeEnd(outgoingDeck)
 
                 val activeUiTempo = if (t < 0.50f) outTempoRatio else inTempoRatio
 
@@ -1089,38 +1138,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 outgoingEq.updateOutgoingEq(t, selectedTool)
                 incomingEq.updateIncomingEq(t, selectedTool)
 
-                // Tool-specific volume envelopes:
-                val outGain = when (selectedTool) {
-                    AutomixTransitionTool.HIGH_PASS_RISER_SLAM -> when {
-                        t < 0.48f -> 1.0f - (t / 0.48f) * 0.15f
-                        else -> {
-                            val tailFrac = ((t - 0.48f) / 0.52f).coerceIn(0f, 1f)
-                            0.85f * (1f - tailFrac) * (1f - tailFrac) // Fast tension release as Echo tail rings out
-                        }
-                    }
-                    AutomixTransitionTool.SILKY_WARM_ISOLATOR -> cos(t * PI * 0.5).toFloat()
-                    else -> when {
-                        t < 0.45f -> 1.0f - (t / 0.45f) * 0.12f // Holds 100%..88% while driving the bass
-                        else -> {
-                            val tailFrac = ((t - 0.45f) / 0.55f).coerceIn(0f, 1f)
-                            0.88f * cos(tailFrac * PI * 0.5).toFloat() // Fades out while LPF/Echo sweeps
-                        }
-                    }
-                }
-
-                val inGain = when (selectedTool) {
-                    AutomixTransitionTool.HIGH_PASS_RISER_SLAM -> when {
-                        t < 0.45f -> (t / 0.45f) * 0.72f
-                        t < 0.52f -> 0.72f + ((t - 0.45f) / 0.07f) * 0.28f // Slam Drop to 100%!
-                        else -> 1.0f
-                    }
-                    AutomixTransitionTool.SILKY_WARM_ISOLATOR -> sin(t * PI * 0.5).toFloat()
-                    else -> when {
-                        t < 0.44f -> sin((t / 0.44f) * PI * 0.5).toFloat() * 0.84f
-                        t < 0.54f -> 0.84f + ((t - 0.44f) / 0.10f) * 0.16f
-                        else -> 1.0f
-                    }
-                }
+                val (outGain, inGain) = TransitionEnvelopes.gains(selectedTool, t, plan.handoffFraction)
 
                 if (outgoingDeck.isPlaying) {
                     outgoingDeck.volume = (outGain * duckMultiplier).coerceIn(0f, 1f)
@@ -1129,7 +1147,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
                 // Right on the DJ Bass Swap (t >= 0.50f), swap active deck to incoming track AND
                 // advance nextMatchedSong to (nextIndex + 1) so the banner never duplicates currentSong!
-                if (t >= 0.50f && !hasSwappedActiveDeck) {
+                if (t >= plan.handoffFraction && !hasSwappedActiveDeck) {
                     hasSwappedActiveDeck = true
                     activateDeck(incomingDeck, outgoingDeck)
 
@@ -1202,10 +1220,12 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         outgoing.pause()
         outgoing.volume = duckMultiplier
         outgoing.playbackParameters = PlaybackParameters.DEFAULT
+        restoreEchoQueue()
         eqProcessorA.resetEq()
         eqProcessorB.resetEq()
         incoming.volume = duckMultiplier
         incoming.playbackParameters = PlaybackParameters.DEFAULT
+        applyTrackNormalization(incoming, targetSong.id)
         activateDeck(incoming, outgoing)
         isPrebufferedForIndex = -1
         activeTransitionTargetIndex = -1
@@ -1262,6 +1282,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         eqProcessorB.resetEq()
 
         inactiveDeck.pause()
+        restoreEchoQueue()
+        applyTrackNormalization(activeDeck, _playerState.value.currentSong?.id)
         inactiveDeck.volume = 1.0f * duckMultiplier
         inactiveDeck.playbackParameters = PlaybackParameters.DEFAULT
 
