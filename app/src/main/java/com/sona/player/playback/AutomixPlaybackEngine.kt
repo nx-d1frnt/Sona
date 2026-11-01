@@ -214,11 +214,21 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 isPrebufferedForIndex = -1
                 currentMatchResult = null
 
+                val upcomingSong = playlist.getOrNull(currentIdx + 1)
+                val upcomingAnalysis = upcomingSong?.let { analysisEngine.getCached(it.id) }
+
                 _playerState.value = _playerState.value.copy(
                     currentSong = song,
                     currentIndex = currentIdx,
                     durationMs = duration,
-                    currentPositionMs = deck.currentPosition.coerceAtLeast(0L)
+                    currentPositionMs = deck.currentPosition.coerceAtLeast(0L),
+                    automix = _playerState.value.automix.copy(
+                        currentAnalysis = song?.let { analysisEngine.getCached(it.id) },
+                        nextMatchedSong = upcomingSong,
+                        nextMatchedAnalysis = upcomingAnalysis,
+                        isTransitioning = false,
+                        transitionProgress = 0f
+                    )
                 )
 
                 if (song != null) {
@@ -456,14 +466,17 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             isPrebufferedForIndex = -1
         }
 
-        _playerState.value = _playerState.value.copy(
-            currentQueue = playlist.toList(),
-            automix = _playerState.value.automix.copy(
-                nextMatchedSong = match.song,
-                nextMatchedAnalysis = match.analysis,
-                matchScorePercent = match.matchScorePercent
+        // Only update nextMatchedSong if match.song is NOT the current song
+        if (match.song.id != currentSong.id) {
+            _playerState.value = _playerState.value.copy(
+                currentQueue = playlist.toList(),
+                automix = _playerState.value.automix.copy(
+                    nextMatchedSong = match.song,
+                    nextMatchedAnalysis = match.analysis,
+                    matchScorePercent = match.matchScorePercent
+                )
             )
-        )
+        }
     }
 
     private fun startTrackingProgress() {
@@ -556,6 +569,17 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         val crossfadeDurationMs = (curAnalysis?.crossfadeDurationMs ?: 7500L).coerceIn(5000L, 10_000L)
 
+        // Ensure nextMatchedSong is strictly the incoming nextSong before crossfade starts
+        _playerState.value = _playerState.value.copy(
+            automix = _playerState.value.automix.copy(
+                isTransitioning = true,
+                transitionProgress = 0f,
+                nextMatchedSong = nextSong,
+                nextMatchedAnalysis = nextAnalysis,
+                activeTempoRatio = 1.0f
+            )
+        )
+
         crossfadeJob = scope.launch {
             // Initialize DJ EQ Transition (incoming starts with High-Pass Bass Cut)
             outgoingEq.updateOutgoingEq(0f)
@@ -569,7 +593,6 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
             val stepMs = 50L
             val totalSteps = (crossfadeDurationMs / stepMs).toInt().coerceAtLeast(20)
-            var hasSwappedActiveDeck = false
 
             for (step in 1..totalSteps) {
                 if (!isActive) break
@@ -595,46 +618,24 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 }
                 incomingDeck.volume = (inGain * duckMultiplier).coerceIn(0f, 1f)
 
-                // At the peak of the transition (t >= 0.50f), swap active deck so UI & MediaSession
-                // smoothly transition cover art, Monet palette, and metadata to the incoming track!
-                if (t >= 0.50f && !hasSwappedActiveDeck) {
-                    hasSwappedActiveDeck = true
-                    activeDeck = incomingDeck
-                    inactiveDeck = outgoingDeck
-                    mediaSession?.player = activeDeck
-
-                    val newDuration = activeDeck.duration.takeIf { it > 0 } ?: nextSong.durationMs
-                    _playerState.value = _playerState.value.copy(
-                        currentSong = nextSong,
-                        currentIndex = nextIndex,
-                        durationMs = newDuration,
-                        currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L),
-                        automix = _playerState.value.automix.copy(
-                            currentAnalysis = nextAnalysis,
-                            transitionProgress = t,
-                            isTransitioning = true,
-                            activeTempoRatio = 1.0f
-                        )
+                // Update transition progress for UI (outgoing song remains currentSong until crossfade completes)
+                _playerState.value = _playerState.value.copy(
+                    automix = _playerState.value.automix.copy(
+                        isTransitioning = true,
+                        transitionProgress = t,
+                        nextMatchedSong = nextSong,
+                        nextMatchedAnalysis = nextAnalysis,
+                        activeTempoRatio = 1.0f
                     )
-                } else {
-                    _playerState.value = _playerState.value.copy(
-                        automix = _playerState.value.automix.copy(
-                            isTransitioning = true,
-                            transitionProgress = t,
-                            activeTempoRatio = 1.0f
-                        )
-                    )
-                }
+                )
 
                 delay(stepMs)
             }
 
-            // Ensure deck swap completed if loop ended
-            if (!hasSwappedActiveDeck) {
-                activeDeck = incomingDeck
-                inactiveDeck = outgoingDeck
-                mediaSession?.player = activeDeck
-            }
+            // Crossfade complete: make incomingDeck the active deck
+            activeDeck = incomingDeck
+            inactiveDeck = outgoingDeck
+            mediaSession?.player = activeDeck
 
             // Stop and reset the old outgoing deck & both EQ processors
             outgoingDeck.pause()
@@ -648,11 +649,18 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             activeDeck.playbackParameters = PlaybackParameters.DEFAULT
             isPrebufferedForIndex = -1
 
+            val upcomingSong = playlist.getOrNull(nextIndex + 1)
+            val upcomingAnalysis = upcomingSong?.let { analysisEngine.getCached(it.id) }
+
             _playerState.value = _playerState.value.copy(
                 currentSong = nextSong,
                 currentIndex = nextIndex,
+                durationMs = activeDeck.duration.takeIf { it > 0 } ?: nextSong.durationMs,
+                currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L),
                 automix = _playerState.value.automix.copy(
                     currentAnalysis = nextAnalysis,
+                    nextMatchedSong = upcomingSong,
+                    nextMatchedAnalysis = upcomingAnalysis,
                     isTransitioning = false,
                     transitionProgress = 0f,
                     activeTempoRatio = 1.0f
@@ -690,6 +698,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             isPrebufferedForIndex = -1
 
             val nextAnalysis = analysisEngine.getCached(nextSong.id)
+            val upcomingSong = playlist.getOrNull(nextIdx + 1)
+            val upcomingAnalysis = upcomingSong?.let { analysisEngine.getCached(it.id) }
+
             _playerState.value = _playerState.value.copy(
                 currentSong = nextSong,
                 currentIndex = nextIdx,
@@ -697,6 +708,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L),
                 automix = _playerState.value.automix.copy(
                     currentAnalysis = nextAnalysis,
+                    nextMatchedSong = upcomingSong,
+                    nextMatchedAnalysis = upcomingAnalysis,
                     isTransitioning = false,
                     transitionProgress = 0f,
                     activeTempoRatio = 1.0f
@@ -726,10 +739,16 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         activeDeck.volume = 1.0f * duckMultiplier
         activeDeck.playbackParameters = PlaybackParameters.DEFAULT
 
+        val curIdx = _playerState.value.currentIndex
+        val upcomingSong = playlist.getOrNull(curIdx + 1)
+        val upcomingAnalysis = upcomingSong?.let { analysisEngine.getCached(it.id) }
+
         _playerState.value = _playerState.value.copy(
             automix = _playerState.value.automix.copy(
                 isTransitioning = false,
                 transitionProgress = 0f,
+                nextMatchedSong = upcomingSong,
+                nextMatchedAnalysis = upcomingAnalysis,
                 activeTempoRatio = 1.0f
             )
         )

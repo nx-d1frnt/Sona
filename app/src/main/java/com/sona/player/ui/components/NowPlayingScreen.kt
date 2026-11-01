@@ -358,17 +358,18 @@ fun NowPlayingScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Стильная капсула Automix: показывает «Automixing → [Следующий трек] • BPM» во время сведения или в зоне микса
+                val nextTrack = automixState.nextMatchedSong
                 val showAutomixBanner = automixState.isEnabled &&
                     (automixState.isTransitioning || progress >= automixZoneFraction) &&
-                    automixState.nextMatchedSong != null
+                    nextTrack != null &&
+                    nextTrack.id != currentSong?.id
 
                 AnimatedContent(
                     targetState = showAutomixBanner,
                     transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
                     label = "AutomixBannerTransition"
                 ) { showBanner ->
-                    if (showBanner && automixState.nextMatchedSong != null) {
-                        val nextTrack = automixState.nextMatchedSong
+                    if (showBanner && nextTrack != null && nextTrack.id != currentSong?.id) {
                         val bpmText = automixState.nextMatchedAnalysis?.bpm?.roundToInt()
                             ?: automixState.currentAnalysis?.bpm?.roundToInt()
 
