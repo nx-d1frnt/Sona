@@ -89,7 +89,7 @@ fun NowPlayingScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // 1. Полноэкранная резкая обложка альбома на весь экран
+        // 1. Полноэкранная обложка альбома на весь экран (фон)
         if (song.albumArtUri != null) {
             AsyncImage(
                 model = song.albumArtUri,
@@ -113,55 +113,34 @@ fun NowPlayingScreen(
             }
         }
 
-        // 2. Блюр этой же обложки снизу перед элементами управления (с мягким градиентным затуханием)
+        // 2. Мягкое затемнение сверху (чтобы статус-бар и иконка закрытия читались на светлых обложках)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxSize(0.55f)
-                .align(Alignment.BottomCenter)
-        ) {
-            // Размытая копия обложки только под областью управления
-            if (song.albumArtUri != null) {
-                AsyncImage(
-                    model = song.albumArtUri,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    alignment = Alignment.BottomCenter,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .blur(35.dp)
-                )
-            }
-
-            // Плавный градиент-затемнение от прозрачного к плотному темному фону для идеальной читаемости
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Transparent,
-                                Color.Black.copy(alpha = 0.5f),
-                                Color.Black.copy(alpha = 0.85f),
-                                Color.Black.copy(alpha = 0.96f)
-                            )
-                        )
-                    )
-            )
-        }
-
-        // Верхний градиент для читаемости кнопки сворачивания и надписи
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp)
+                .height(130.dp)
                 .align(Alignment.TopCenter)
                 .background(
                     Brush.verticalGradient(
                         colors = listOf(
-                            Color.Black.copy(alpha = 0.65f),
+                            Color.Black.copy(alpha = 0.5f),
                             Color.Transparent
                         )
+                    )
+                )
+        )
+
+        // 3. Плавный градиент-затухание внизу перед элементами управления (без обрыва и без сплошного блюр-блока)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxSize(0.65f)
+                .align(Alignment.BottomCenter)
+                .background(
+                    Brush.verticalGradient(
+                        0.0f to Color.Transparent,
+                        0.35f to Color.Black.copy(alpha = 0.25f),
+                        0.65f to Color.Black.copy(alpha = 0.60f),
+                        1.0f to Color.Black.copy(alpha = 0.88f)
                     )
                 )
         )
