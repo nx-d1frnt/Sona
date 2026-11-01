@@ -52,6 +52,12 @@ class MusicPlayerManager(private val context: Context) {
 
     fun toggleAutomix() = engine.toggleAutomix()
 
+    fun skipToQueueIndex(index: Int) = engine.skipToQueueIndex(index)
+
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = engine.moveQueueItem(fromIndex, toIndex)
+
+    fun removeFromQueue(index: Int) = engine.removeFromQueue(index)
+
     fun release() {
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null

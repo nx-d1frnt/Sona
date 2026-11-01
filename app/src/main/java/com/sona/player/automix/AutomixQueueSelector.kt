@@ -93,6 +93,46 @@ object AutomixQueueSelector {
     }
 
     /**
+     * Builds a SavedTransition descriptor between two consecutive tracks in the queue.
+     */
+    fun buildSavedTransition(
+        fromSongId: Long,
+        toSongId: Long,
+        fromAnalysis: TrackAnalysis,
+        toAnalysis: TrackAnalysis,
+        isCompleted: Boolean = false
+    ): SavedTransition {
+        val rawScore = computeCompatibilityScore(fromAnalysis, toAnalysis)
+        val scorePct = (rawScore * 100f).roundToInt().coerceIn(62, 99)
+
+        val bpmA = fromAnalysis.bpm
+        val bpmB = toAnalysis.bpm
+        val directDiff = abs(bpmA - bpmB) / bpmA
+        val halfDoubleDiff = min(abs(bpmA - bpmB * 2f), abs(bpmA - bpmB * 0.5f)) / bpmA
+        val energyDelta = toAnalysis.energy - fromAnalysis.energy
+
+        val style = when {
+            directDiff <= 0.025f -> "Tempo-Locked Bass Swap"
+            halfDoubleDiff <= 0.04f && directDiff > 0.15f -> "Half/Double-Time EQ Mix"
+            energyDelta >= 0.15f -> "Energy Lift + Bass Drop"
+            energyDelta <= -0.15f -> "Warm LPF Breakdown Sweep"
+            else -> "DJ Bass Swap + LPF Sweep"
+        }
+
+        return SavedTransition(
+            fromSongId = fromSongId,
+            toSongId = toSongId,
+            fromBpm = bpmA,
+            toBpm = bpmB,
+            matchScorePercent = scorePct,
+            overlapDurationMs = fromAnalysis.crossfadeDurationMs,
+            cueInMs = toAnalysis.cueInMs,
+            transitionStyle = style,
+            isCompleted = isCompleted
+        )
+    }
+
+    /**
      * Calculates subtle, pitch-preserving playback speed ratios (max ±4%) so two tracks
      * with close BPMs meet halfway in tempo during the crossfade, then return to 1.0x.
      */

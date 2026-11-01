@@ -210,6 +210,8 @@ fun MainScreen(
             durationMs = playerState.durationMs,
             isShuffle = playerState.isShuffleEnabled,
             repeatMode = playerState.repeatMode,
+            queue = playerState.currentQueue,
+            currentIndex = playerState.currentIndex,
             automixState = playerState.automix,
             onPlayPauseClick = { viewModel.togglePlayPause() },
             onNextClick = { viewModel.skipToNext() },
@@ -217,6 +219,9 @@ fun MainScreen(
             onShuffleClick = { viewModel.toggleShuffle() },
             onRepeatClick = { viewModel.toggleRepeat() },
             onAutomixClick = { viewModel.toggleAutomix() },
+            onQueueItemClick = { viewModel.skipToQueueIndex(it) },
+            onMoveQueueItem = { from, to -> viewModel.moveQueueItem(from, to) },
+            onRemoveQueueItem = { viewModel.removeFromQueue(it) },
             onSeek = { viewModel.seekTo(it) },
             onDismiss = { isNowPlayingExpanded = false }
         )

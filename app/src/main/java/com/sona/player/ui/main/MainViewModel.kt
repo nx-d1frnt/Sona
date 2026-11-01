@@ -95,4 +95,7 @@ class MainViewModel(
     fun toggleShuffle() = playerManager.toggleShuffle()
     fun toggleRepeat() = playerManager.toggleRepeatMode()
     fun toggleAutomix() = playerManager.toggleAutomix()
+    fun skipToQueueIndex(index: Int) = playerManager.skipToQueueIndex(index)
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) = playerManager.moveQueueItem(fromIndex, toIndex)
+    fun removeFromQueue(index: Int) = playerManager.removeFromQueue(index)
 }

@@ -39,6 +39,8 @@ class AudioAnalysisEngine(private val context: Context) {
 
     fun getCached(songId: Long): TrackAnalysis? = memoryCache[songId]
 
+    fun getAllCached(): Map<Long, TrackAnalysis> = HashMap(memoryCache)
+
     suspend fun analyzeSong(song: Song): TrackAnalysis {
         memoryCache[song.id]?.let { return it }
 

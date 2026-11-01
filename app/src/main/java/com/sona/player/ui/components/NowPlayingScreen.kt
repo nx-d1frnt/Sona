@@ -97,6 +97,8 @@ fun NowPlayingScreen(
     durationMs: Long,
     isShuffle: Boolean,
     repeatMode: Int,
+    queue: List<Song> = emptyList(),
+    currentIndex: Int = 0,
     automixState: AutomixTransitionState = AutomixTransitionState(),
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
@@ -104,6 +106,9 @@ fun NowPlayingScreen(
     onShuffleClick: () -> Unit,
     onRepeatClick: () -> Unit,
     onAutomixClick: () -> Unit = {},
+    onQueueItemClick: (Int) -> Unit = {},
+    onMoveQueueItem: (Int, Int) -> Unit = { _, _ -> },
+    onRemoveQueueItem: (Int) -> Unit = {},
     onSeek: (Long) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
@@ -113,6 +118,7 @@ fun NowPlayingScreen(
     // Динамическое извлечение палитры Monet прямо из обложки текущего трека
     val palette = rememberArtworkPalette(song.albumArtUri)
 
+    var isQueueSheetOpen by remember { mutableStateOf(false) }
     var isUserSeeking by remember { mutableFloatStateOf(-1f) }
     val progress = if (isUserSeeking >= 0f) {
         isUserSeeking
@@ -128,7 +134,13 @@ fun NowPlayingScreen(
         1.0f
     }
 
-    BackHandler(onBack = onDismiss)
+    BackHandler(onBack = {
+        if (isQueueSheetOpen) {
+            isQueueSheetOpen = false
+        } else {
+            onDismiss()
+        }
+    })
 
     Box(
         modifier = modifier
@@ -403,6 +415,7 @@ fun NowPlayingScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 8.dp)
+                                .clickable { isQueueSheetOpen = true }
                         ) {
                             Row(
                                 modifier = Modifier
@@ -525,17 +538,17 @@ fun NowPlayingScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Queue pill
+                        // Queue pill (opens Queue & Automix Chain sheet)
                         Surface(
                             shape = RoundedCornerShape(16.dp),
-                            color = Color.White.copy(alpha = 0.12f),
+                            color = if (isQueueSheetOpen) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
                             modifier = Modifier.size(width = 48.dp, height = 40.dp)
                         ) {
-                            IconButton(onClick = { /* Queue */ }) {
+                            IconButton(onClick = { isQueueSheetOpen = !isQueueSheetOpen }) {
                                 Icon(
                                     imageVector = Icons.Rounded.QueueMusic,
                                     contentDescription = "Queue",
-                                    tint = Color.White.copy(alpha = 0.85f),
+                                    tint = if (isQueueSheetOpen) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f),
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
@@ -619,6 +632,28 @@ fun NowPlayingScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Выдвижное меню очереди треков с сохранёнными DJ-переходами
+        AnimatedContent(
+            targetState = isQueueSheetOpen,
+            transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(200)) },
+            label = "QueueSheetOverlay"
+        ) { open ->
+            if (open) {
+                AutomixQueueSheet(
+                    queue = queue,
+                    currentIndex = currentIndex,
+                    currentSong = song,
+                    automixState = automixState,
+                    palette = palette,
+                    onTrackClick = { idx -> onQueueItemClick(idx) },
+                    onMoveTrack = { from, to -> onMoveQueueItem(from, to) },
+                    onRemoveTrack = { idx -> onRemoveQueueItem(idx) },
+                    onToggleAutomix = onAutomixClick,
+                    onDismiss = { isQueueSheetOpen = false }
+                )
+            }
         }
     }
 }
