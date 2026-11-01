@@ -72,6 +72,10 @@ fun MainScreen(
     val canAnalyze by viewModel.canAnalyze.collectAsState()
     var settingsOpen by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var forceAnalysis by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val notificationPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { viewModel.startLibraryAnalysis(forceAnalysis) }
     var isNowPlayingExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -220,7 +224,7 @@ fun MainScreen(
                 ) {
                     Text("Анализ всей библиотеки", style = MaterialTheme.typography.titleMedium)
                     Text("Распознаёт вокал, ритм, громкость и точки переходов. Результаты сохраняются на устройстве и используются повторно.")
-                    Text("Обработка ждёт паузы в воспроизведении. Держите приложение открытым до завершения; после закрытия можно продолжить с сохранённых результатов.",
+                    Text("Обработка работает с выключенным экраном и ждёт паузы в воспроизведении. Прогресс и остановка доступны в уведомлении.",
                         style = MaterialTheme.typography.bodySmall)
                     if (!analysis.running) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -234,6 +238,7 @@ fun MainScreen(
                         if (forceAnalysis) Text("Повторный анализ всей библиотеки может занять много времени и расходует заряд.",
                             style = MaterialTheme.typography.bodySmall)
                     }
+                    if (analysis.message.isNotEmpty()) Text(analysis.message)
                     if (analysis.total > 0) {
                         Text(when {
                             analysis.running && analysis.waitingForPlayback -> "Ожидание паузы в воспроизведении"
@@ -251,7 +256,13 @@ fun MainScreen(
                     if (analysis.running) {
                         androidx.compose.material3.OutlinedButton(onClick = viewModel::cancelLibraryAnalysis) { Text("Остановить анализ") }
                     } else {
-                        Button(onClick = { viewModel.startLibraryAnalysis(forceAnalysis) }, enabled = canAnalyze) {
+                        Button(onClick = {
+                            if (android.os.Build.VERSION.SDK_INT >= 33 &&
+                                androidx.core.content.ContextCompat.checkSelfPermission(context,
+                                    android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                            } else viewModel.startLibraryAnalysis(forceAnalysis)
+                        }, enabled = canAnalyze) {
                             Text(if (forceAnalysis) "Пересчитать всю библиотеку" else "Анализировать библиотеку")
                         }
                         if (!canAnalyze) Text("Для запуска нужен доступ к непустой музыкальной библиотеке.")

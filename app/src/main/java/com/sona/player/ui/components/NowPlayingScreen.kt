@@ -145,13 +145,17 @@ fun NowPlayingScreen(
         automixState.nextMatchedAnalysis?.takeIf { it.songId == nextId }
             ?: nextId?.let { automixState.analyzedTracks[it] }
     }
-    val transitionPreview = remember(activeTrackAnalysis, activeNextAnalysis, automixState.mode) {
+    val transitionPreview = remember(activeTrackAnalysis, activeNextAnalysis, automixState.mode, automixState.entryPositionMs) {
         if (activeTrackAnalysis != null && activeNextAnalysis != null) {
-            TransitionPlanner.plan(activeTrackAnalysis, activeNextAnalysis, automixState.mode)
+            TransitionPlanner.plan(activeTrackAnalysis, activeNextAnalysis, automixState.mode, entryPositionMs = automixState.entryPositionMs)
         } else null
     }
+    val displayedMixOutMs = transitionPreview?.mixOutMs?.let { planned ->
+        if (automixState.manualSeek) planned else maxOf(planned, com.sona.player.automix.TrackListeningGuard.earliestPosition(
+            currentPositionMs, durationMs, automixState.playedMs, automixState.activeTempoRatio))
+    }
     val targetZoneFraction = if (automixState.isEnabled) {
-        transitionPreview?.let { (it.mixOutMs.toFloat() / activeTrackAnalysis!!.durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f) }
+        displayedMixOutMs?.let { (it.toFloat() / activeTrackAnalysis!!.durationMs.coerceAtLeast(1L)).coerceIn(0f, 1f) }
             ?: activeTrackAnalysis?.effectiveZoneFraction(automixState.mode, activeNextAnalysis)
             ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) 0.56f else 0.82f
     } else {
@@ -532,7 +536,7 @@ fun NowPlayingScreen(
                             " ($sign$pct%)"
                         } else ""
                         val resolvedMode = activeTrackAnalysis.resolveEffectiveMode(automixState.mode, activeNextAnalysis)
-                        val mixPointMs = transitionPreview?.mixOutMs
+                        val mixPointMs = displayedMixOutMs
                             ?: activeTrackAnalysis.effectiveMixOutMs(automixState.mode, activeNextAnalysis)
                         val mixPointTag = when (automixState.mode) {
                             AutomixMode.AUTO_DJ -> {

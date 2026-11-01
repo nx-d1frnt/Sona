@@ -24,6 +24,10 @@ internal object MusicalCueSelector {
         return if (covered >= (endMs - startMs) * 0.85) (weighted / covered).toFloat() else null
     }
 
+    fun isVocalPause(track: TrackAnalysis, cue: Long): Boolean =
+        (vocalRisk(track, cue, cue + 1000L) ?: 1f) < 0.25f &&
+            (vocalRisk(track, cue, cue + 3000L) ?: 1f) < 0.35f
+
     fun beatSection(track: TrackAnalysis, positionMs: Long): BeatSection? = track.beatSections
         .filter { it.confidence >= 0.65f && positionMs in it.startMs..it.endMs && it.bpm.isFinite() && it.bpm > 0 }
         .maxByOrNull { it.confidence }
@@ -41,12 +45,16 @@ internal object MusicalCueSelector {
             minOf(baseMs + 5000L, 24_000L, track.durationMs - overlapMs - 1000L), overlapMs, outgoing = false)
     }
 
-    /** DJ entries may use the measured core, rather than being confined to the intro. */
-    fun djIncoming(track: TrackAnalysis, base: Long, overlap: Long,
-                   preferCore: Boolean, outgoingVoice: Float): Long {
-        val upper = minOf((track.durationMs * 0.60).toLong(), track.durationMs - overlap - 1000L)
-        if (upper <= 0L) return base
-        val target = if (preferCore) (track.durationMs * 0.48).toLong() else base
+    /** Shared entry bound: an outro decision must never turn into skipping half the next song. */
+    fun maxEntryCue(track: TrackAnalysis, overlap: Long): Long = minOf(24_000L,
+        (track.durationMs * 0.12).toLong(), track.durationMs - overlap - 1000L,
+        track.mixOutMs - TrackListeningGuard.MIN_PLAYED_MS).coerceAtLeast(0L)
+
+    /** Score only intro entries; middle exit selection is independent of incoming entry. */
+    fun djIncoming(track: TrackAnalysis, base: Long, overlap: Long, outgoingVoice: Float): Long {
+        val upper = maxEntryCue(track, overlap)
+        if (upper <= 0L) return 0L
+        val target = base.coerceIn(0L, upper)
         val beats = track.beatSections.filter { it.confidence >= 0.45f }
             .flatMap { section -> section.beatsMs.filter { it in section.startMs..section.endMs } }.toSet()
         val measured = track.vocalSections.flatMap { section ->
@@ -57,7 +65,7 @@ internal object MusicalCueSelector {
             val risk = vocalRisk(track, cue, cue + 3000L) ?: 1f
             val distance = abs(cue - target).toFloat() / track.durationMs.coerceAtLeast(1L)
             risk * outgoingVoice * 0.5f + distance * 1.2f - if (cue in beats) 0.06f else 0f
-        } ?: base
+        } ?: target
     }
 
     private fun choose(track: TrackAnalysis, baseMs: Long, lower: Long, upper: Long,

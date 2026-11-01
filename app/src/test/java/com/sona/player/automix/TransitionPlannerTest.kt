@@ -92,18 +92,45 @@ class TransitionPlannerTest {
         assertSame(first, TransitionPlanner.plan(outgoing, instrumental, AutomixMode.AUTO_DJ))
     }
 
-    @Test fun autoMiddleMixCanEnterMeasuredCoreInsteadOfIntro() {
+    @Test fun autoMiddleExitKeepsIncomingInIntroDespiteAttractiveCore() {
         val outgoing = from().copy(midMixConfidence = 0f,
-            vocalSections = listOf(VocalSection(156_000, 210_000, 0.8f)))
+            beatSections = from().beatSections + beats(156_000, 210_000, 120f),
+            vocalSections = listOf(VocalSection(156_000, 210_000, 0.05f)))
         val incoming = to().copy(deepCueInMs = 8000L,
             beatSections = to().beatSections + beats(144_000, 180_000, 120f),
             vocalSections = to().vocalSections + VocalSection(144_000, 180_000, 0.05f))
         val plan = TransitionPlanner.plan(outgoing, incoming, AutomixMode.AUTO_DJ)
         assertTrue(plan.mixOutMs in 156_000L..210_000L)
-        assertTrue(plan.cueInMs in 144_000L..180_000L)
-        assertEquals(AutomixTransitionTool.ECHO_OUT, plan.tool)
+        assertTrue(plan.cueInMs in 0L..24_000L)
+        assertNotEquals(AutomixTransitionTool.ECHO_OUT, plan.tool)
         assertEquals(plan.cueInMs, AutomixQueueSelector.buildSavedTransition(1, 2,
             outgoing, incoming, AutomixMode.AUTO_DJ).cueInMs)
+    }
+
+    @Test fun deepEntryCannotReuseAnAlreadyPassedMiddleExit() {
+        val outgoing = from().copy(beatSections = from().beatSections + beats(156_000, 210_000, 120f),
+            vocalSections = listOf(VocalSection(156_000, 210_000, 0.05f),
+            VocalSection(270_000, 300_000, 0.05f)))
+        val initial = TransitionPlanner.plan(outgoing, to(), AutomixMode.AUTO_DJ)
+        assertTrue(initial.mixOutMs < 210_000L)
+        val deepEntry = TransitionPlanner.plan(outgoing, to(), AutomixMode.AUTO_DJ, entryPositionMs = 175_000L)
+        assertTrue(deepEntry.mixOutMs >= 220_000L)
+    }
+
+    @Test fun incomingCoreLeavesSpaceForAtLeastFortyFiveSecondsBeforeOutro() {
+        val incoming = to().copy(mixOutMs = 160_000L,
+            vocalSections = listOf(VocalSection(140_000, 180_000, 0.01f)))
+        val cue = MusicalCueSelector.djIncoming(incoming, 0L, 8500L, 0.8f)
+        assertTrue(cue <= 115_000L)
+    }
+
+    @Test fun everyModeAndManualNextBoundLegacyDeepCuesToIntro() {
+        val incoming = to().copy(cueInMs = 140_000L, deepCueInMs = 150_000L,
+            vocalSections = listOf(VocalSection(140_000L, 180_000L, 0.01f)))
+        for (mode in listOf(AutomixMode.AUTO_DJ, AutomixMode.CLASSIC_OUTRO, AutomixMode.QUICK_MID_MIX)) {
+            assertTrue(TransitionPlanner.plan(from(), incoming, mode).cueInMs in 0L..24_000L)
+            assertTrue(TransitionPlanner.plan(from(), incoming, mode, 5500L, 60_000L).cueInMs in 0L..24_000L)
+        }
     }
 
     @Test fun queueMetadataAndPlaybackUseTheSameToolCueAndDuration() {

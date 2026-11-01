@@ -29,6 +29,12 @@ import kotlin.math.roundToInt
  */
 class AudioAnalysisEngine(private val context: Context) {
 
+    private var vocalDetector: YamnetVocalDetector? = null
+    suspend fun releaseVocalDetector() = codecSemaphore.withPermit {
+        vocalDetector?.close()
+        vocalDetector = null
+    }
+
     private val windowDecoder = AudioWindowDecoder(context)
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
     private val cacheFile = File(context.filesDir, "sona_automix_analysis_v7.json")
@@ -36,6 +42,8 @@ class AudioAnalysisEngine(private val context: Context) {
     private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
     private val cacheSaveScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheWriteMutex = Mutex()
+    @Volatile private var pendingSave: kotlinx.coroutines.Job? = null
+    suspend fun flushPendingWrites() { pendingSave?.join() }
 
     init {
         loadCacheFromDisk()
@@ -45,16 +53,16 @@ class AudioAnalysisEngine(private val context: Context) {
 
     fun getAllCached(): Map<Long, TrackAnalysis> = HashMap(memoryCache)
 
-    fun needsAnalysis(songId: Long): Boolean = memoryCache[songId]?.loudnessAnalyzed != true
+    fun needsAnalysis(songId: Long): Boolean = memoryCache[songId]?.let { it.loudnessAnalyzed && it.featureAnalysisAttempted } != true
 
     suspend fun analyzeSong(song: Song, force: Boolean = false): TrackAnalysis {
-        memoryCache[song.id]?.takeIf { !force && it.loudnessAnalyzed }?.let { return it }
+        memoryCache[song.id]?.takeIf { !force && it.loudnessAnalyzed && it.featureAnalysisAttempted }?.let { return it }
 
         val analysis = codecSemaphore.withPermit {
-            memoryCache[song.id]?.takeIf { !force && it.loudnessAnalyzed }?.let { return@withPermit it }
-            val existing = if (force) null else memoryCache[song.id]
+            memoryCache[song.id]?.takeIf { !force && it.loudnessAnalyzed && it.featureAnalysisAttempted }?.let { return@withPermit it }
+            val existing = if (force) null else memoryCache[song.id]?.takeIf { it.featureAnalysisAttempted }
             withContext(Dispatchers.Default) {
-                withTimeoutOrNull(20_000L) {
+                withTimeoutOrNull(60_000L) {
                     if (existing == null) decodeAndAnalyze(song) else enrichLoudness(song, existing)
                 } ?: existing?.copy(loudnessAnalyzed = true) ?: createFallbackAnalysis(song)
             }.also {
@@ -79,6 +87,7 @@ class AudioAnalysisEngine(private val context: Context) {
     }
 
     private suspend fun decodeAndAnalyze(song: Song): TrackAnalysis {
+        val startedAt = android.os.SystemClock.elapsedRealtime()
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
         // 1. Sample 3 structural windows:
@@ -86,33 +95,53 @@ class AudioAnalysisEngine(private val context: Context) {
         // - Core/Mid: 48% .. 70% of track at 40 Hz (25ms frames) for BPM & Mid-Track Post-Chorus Breakdown
         // - Outro: last 28% of track (18s..38s) at 25 Hz (40ms frames) for Outro Phrase Mix-Out
         val introWindowMs = min(24_000L, (durationMs * 35L) / 100L)
-        val intro = windowDecoder.decode(song, 0L, introWindowMs)
-        val introFrames = intro.rmsEnvelope(25)
-
         val coreStartMs = (durationMs * 0.48f).toLong()
         val coreWindowMs = (durationMs * 0.22f).toLong().coerceIn(14_000L, 42_000L)
-        val core = windowDecoder.decode(song, coreStartMs, coreWindowMs)
-        val coreFrames = core.rmsEnvelope(25)
-
         val outroWindowMs = (durationMs * 0.28f).toLong().coerceIn(18_000L, 38_000L)
             .coerceAtMost(durationMs / 2)
         val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
-        val outro = windowDecoder.decode(song, outroStartMs, outroWindowMs)
+        val windows = mutableListOf<AudioWindow>()
+        val beats = mutableListOf<BeatSection>()
+        val vocals = mutableListOf<VocalSection>()
+        var decodeMs = 0L
+        var beatMs = 0L
+        var vocalMs = 0L
+        var classifierAvailable = true
+        AnalysisPipeline.process(listOf(0L to introWindowMs, coreStartMs to coreWindowMs,
+            outroStartMs to outroWindowMs), prepare = { (start, length) ->
+            val before = android.os.SystemClock.elapsedRealtime()
+            windowDecoder.decode(song, start, length).also {
+                decodeMs += android.os.SystemClock.elapsedRealtime() - before
+            }
+        }, consume = { window ->
+            windows += window
+            val beforeBeats = android.os.SystemClock.elapsedRealtime()
+            BeatTracker.analyze(window)?.let { beats += it }
+            beatMs += android.os.SystemClock.elapsedRealtime() - beforeBeats
+            val beforeVocals = android.os.SystemClock.elapsedRealtime()
+            if (classifierAvailable) {
+                try {
+                    val detector = vocalDetector ?: YamnetVocalDetector(context).also { vocalDetector = it }
+                    vocals += detector.analyze(window)
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    classifierAvailable = false
+                    android.util.Log.w("SonaAnalysis", "Vocal classifier unavailable", failure)
+                } catch (failure: LinkageError) {
+                    classifierAvailable = false
+                    android.util.Log.w("SonaAnalysis", "Vocal runtime unavailable", failure)
+                }
+            }
+            vocalMs += android.os.SystemClock.elapsedRealtime() - beforeVocals
+        })
+        val intro = windows[0]
+        val core = windows[1]
+        val outro = windows[2]
+        val introFrames = intro.rmsEnvelope(25)
+        val coreFrames = core.rmsEnvelope(25)
         val outroFrames = outro.rmsEnvelope(40)
-        val windows = listOf(intro, core, outro)
-        val beats = windows.mapNotNull { BeatTracker.analyze(it) }
-        val vocals = try {
-            YamnetVocalDetector(context).use { detector -> windows.flatMap { detector.analyze(it) } }
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (failure: Exception) {
-            android.util.Log.w("SonaAnalysis", "Vocal classifier unavailable", failure)
-            emptyList()
-        } catch (failure: LinkageError) {
-            android.util.Log.w("SonaAnalysis", "Vocal classifier runtime unavailable", failure)
-            emptyList()
-        }
-
+        android.util.Log.i("SonaAnalysisPerf", "song=${song.id} decodeMs=$decodeMs beatMs=$beatMs vocalMs=$vocalMs wallMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
         if (coreFrames.isEmpty()) {
             return createFallbackAnalysis(song)
         }
@@ -528,6 +557,10 @@ class AudioAnalysisEngine(private val context: Context) {
                     beatSections = readBeatSections(obj.optJSONArray("beats")),
                     vocalSections = readVocalSections(obj.optJSONArray("vocals")),
                     loudnessSections = readLoudnessSections(obj.optJSONArray("loudness")),
+                    featureAnalysisAttempted = (obj.optInt("featuresVersion", 0) >= 1 ||
+                        (obj.optJSONArray("vocals")?.length() ?: 0) > 0 ||
+                            (obj.optJSONArray("beats")?.length() ?: 0) > 0 ||
+                            (obj.optJSONArray("loudness")?.length() ?: 0) > 0),
                     loudnessAnalyzed = obj.optBoolean("loudnessAnalyzed", false)
                 )
                 memoryCache[item.songId] = item
@@ -581,9 +614,10 @@ class AudioAnalysisEngine(private val context: Context) {
      * temp-file replacement so skipping tracks or cancelling [analysisJob] never aborts or corrupts the file.
      */
     private fun scheduleSaveCacheToDisk() {
-        cacheSaveScope.launch {
+        pendingSave = cacheSaveScope.launch {
             cacheWriteMutex.withLock {
                 try {
+                    val saveStartedAt = android.os.SystemClock.elapsedRealtime()
                     val snapshot = ArrayList(memoryCache.values)
                     val array = JSONArray()
                     for (item in snapshot) {
@@ -607,6 +641,7 @@ class AudioAnalysisEngine(private val context: Context) {
                                     put("times", JSONArray(section.beatsMs))
                                 }) }
                             })
+                            put("featuresVersion", if (item.featureAnalysisAttempted) 1 else 0)
                             put("loudnessAnalyzed", item.loudnessAnalyzed)
                             put("loudness", JSONArray().apply {
                                 item.loudnessSections.forEach { section -> put(JSONObject().apply {
@@ -626,6 +661,7 @@ class AudioAnalysisEngine(private val context: Context) {
                     if (!tempCacheFile.renameTo(cacheFile)) {
                         cacheFile.writeText(array.toString())
                     }
+                    android.util.Log.i("SonaAnalysisPerf", "cacheTracks=${snapshot.size} saveMs=${android.os.SystemClock.elapsedRealtime()-saveStartedAt}")
                 } catch (_: Exception) {}
             }
         }

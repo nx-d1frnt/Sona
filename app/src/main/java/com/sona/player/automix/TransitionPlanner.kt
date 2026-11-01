@@ -17,20 +17,20 @@ internal data class TransitionPlan(
 
 /** One decision for queue previews and playback, including optional manual-skip position. */
 internal object TransitionPlanner {
-    private data class Key(val fromId: Long, val toId: Long, val mode: AutomixMode)
+    private data class Key(val fromId: Long, val toId: Long, val mode: AutomixMode, val entryPositionMs: Long)
     private data class Cached(val from: TrackAnalysis, val to: TrackAnalysis, val plan: TransitionPlan)
     private val previews = java.util.LinkedHashMap<Key, Cached>(32, 0.75f, true)
 
     fun plan(from: TrackAnalysis, to: TrackAnalysis, mode: AutomixMode,
-             customDurationMs: Long? = null, actualOutPositionMs: Long? = null): TransitionPlan {
+             customDurationMs: Long? = null, actualOutPositionMs: Long? = null, entryPositionMs: Long = 0L): TransitionPlan {
         if (customDurationMs != null || actualOutPositionMs != null) {
-            return computePlan(from, to, mode, customDurationMs, actualOutPositionMs)
+            return computePlan(from, to, mode, customDurationMs, actualOutPositionMs, entryPositionMs)
         }
-        val key = Key(from.songId, to.songId, mode)
+        val key = Key(from.songId, to.songId, mode, entryPositionMs)
         synchronized(previews) {
             previews[key]?.takeIf { it.from === from && it.to === to }?.let { return it.plan }
         }
-        val result = computePlan(from, to, mode)
+        val result = computePlan(from, to, mode, entryPositionMs = entryPositionMs)
         synchronized(previews) {
             previews[key] = Cached(from, to, result)
             if (previews.size > 128) previews.remove(previews.keys.first())
@@ -39,13 +39,16 @@ internal object TransitionPlanner {
     }
 
     private fun computePlan(from: TrackAnalysis, to: TrackAnalysis, mode: AutomixMode,
-             customDurationMs: Long? = null, actualOutPositionMs: Long? = null): TransitionPlan {
-        val resolved = from.resolveEffectiveMode(mode, to)
+             customDurationMs: Long? = null, actualOutPositionMs: Long? = null, entryPositionMs: Long = 0L): TransitionPlan {
+        val planningMode = if (mode == AutomixMode.AUTO_DJ &&
+            (from.autoMidCue() ?: Long.MAX_VALUE) < entryPositionMs + TrackListeningGuard.MIN_PLAYED_MS
+        ) AutomixMode.CLASSIC_OUTRO else mode
+        val resolved = from.resolveEffectiveMode(planningMode, to)
         val baseDuration = customDurationMs?.coerceIn(800L, 13_000L)
             ?: if (resolved == AutomixMode.QUICK_MID_MIX) 8500L else from.crossfadeDurationMs.coerceIn(8500L, 13_000L)
-        val defaultOut = actualOutPositionMs ?: from.effectiveMixOutMs(mode, to)
-        val baseOut = if (actualOutPositionMs != null) defaultOut else pairMixOut(from, to, mode, defaultOut, baseDuration)
-        val baseIn = to.effectiveCueInMs(mode, from.energy, from)
+        val defaultOut = actualOutPositionMs ?: from.effectiveMixOutMs(planningMode, to)
+        val baseOut = if (actualOutPositionMs != null) defaultOut else pairMixOut(from, to, planningMode, defaultOut, baseDuration)
+        val baseIn = to.effectiveCueInMs(planningMode, from.energy, from)
         val rawOut = actualOutPositionMs ?: if (resolved == AutomixMode.QUICK_MID_MIX) baseOut else from.mixOutMs
         val outBeat = rhythmSection(from, baseOut)
         val inBeat = rhythmSection(to, baseIn)
@@ -72,7 +75,7 @@ internal object TransitionPlanner {
                 val introLeadMs = ((voiceEnd - rawOut + 750L) * ratios.second / ratios.first).toLong()
                 val instrumentalCue = (to.vocalSections.flatMap { (it.startMs..it.endMs step 500L).toList() } + baseIn)
                     .filter { it >= 0 && it <= to.durationMs - baseDuration &&
-                        it <= (to.durationMs * 0.60).toLong() &&
+                        it <= MusicalCueSelector.maxEntryCue(to, baseDuration) &&
                         (MusicalCueSelector.vocalRisk(to, it, it + introLeadMs) ?: 1f) < 0.20f }
                     .minByOrNull { abs(it - baseIn) }
                 if (instrumentalCue != null && rawOut >= 0 && rawOut + baseDuration < from.durationMs) {
@@ -91,17 +94,20 @@ internal object TransitionPlanner {
                 inVoice != null && inVoice < 0.35f) {
                 tool = AutomixTransitionTool.BEAT_CUT
                 duration = ((period ?: 500f) * 2).toLong().coerceIn(1000L, 2000L)
-                cue = nearestBeat(to, baseIn) ?: baseIn
-                out = if (actualOutPositionMs == null) nearestBeat(from, baseOut) ?: baseOut else baseOut
+                cue = nearestBeat(to, baseIn)?.takeIf { it <= MusicalCueSelector.maxEntryCue(to, duration) } ?: baseIn
+                out = if (actualOutPositionMs == null) nearestBeat(from, baseOut)?.takeIf {
+                    mode != AutomixMode.AUTO_DJ || resolved != AutomixMode.QUICK_MID_MIX ||
+                        MusicalCueSelector.isVocalPause(from, it)
+                } ?: baseOut else baseOut
             } else if ((period != null && gap != null && gap > 0.06f) ||
-                    (outVoice != null && outVoice > 0.35f && inVoice != null && inVoice > 0.35f) ||
-                    (resolved == AutomixMode.QUICK_MID_MIX && (outVoice ?: 1f) >= 0.35f)) {
+                    (outVoice != null && outVoice > 0.35f && inVoice != null && inVoice > 0.35f)) {
                 tool = AutomixTransitionTool.ECHO_OUT
                 duration = ((period ?: 500f) * 6).toLong().coerceIn(2500L, 4500L)
             }
         }
         // Echo Out bridges grooves at natural speed. No Sonic parameter drain may synthesize
         // an EOF tail before the real media item ends.
+        cue = cue.coerceIn(0L, MusicalCueSelector.maxEntryCue(to, duration))
         val finalRatios = if (tool == AutomixTransitionTool.ECHO_OUT) 1f to 1f
             else MusicalCueSelector.tempoRatiosAt(from, to, out, cue)
         return TransitionPlan(tool, out, cue, duration,
@@ -118,16 +124,18 @@ internal object TransitionPlanner {
         val incomingVoice = MusicalCueSelector.vocalRisk(to, cue, cue + 3000L) ?: return base
         if (incomingVoice < 0.35f) return base // Leave room for vocal handoff into an instrumental intro.
         val early = from.resolveEffectiveMode(mode, to) == AutomixMode.QUICK_MID_MIX
-        val lower = maxOf(base - 6000L, if (early) maxOf(90_000L, (from.durationMs * 0.52).toLong())
+        val lower = maxOf(base - 6000L, if (early) maxOf(90_000L, (from.durationMs * 0.55).toLong())
             else (from.durationMs * 0.70).toLong())
         val upper = minOf(base + 6000L, from.durationMs - overlap - 500L,
-            if (early) (from.durationMs * 0.70).toLong() else from.durationMs)
+            if (early) (from.durationMs * 0.67).toLong() else from.durationMs)
         if (upper < lower) return base
         fun score(position: Long): Float {
             val voice = MusicalCueSelector.vocalRisk(from, position, position + 3000L) ?: return Float.POSITIVE_INFINITY
             return voice * incomingVoice + abs(position - base) / 6000f * 0.12f
         }
-        val candidates = (lower..upper step 500L).toList() + base
+        val candidates = ((lower..upper step 500L).toList() + base).filter {
+            !early || mode != AutomixMode.AUTO_DJ || MusicalCueSelector.isVocalPause(from, it)
+        }
         val best = candidates.minByOrNull { score(it) } ?: base
         return if (score(best) < score(base)) best else base
     }

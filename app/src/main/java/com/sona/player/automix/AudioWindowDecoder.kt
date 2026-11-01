@@ -41,7 +41,7 @@ internal class AudioWindowDecoder(private val context: Context) {
                 currentCoroutineContext().ensureActive()
                 check(SystemClock.elapsedRealtime() < deadline) { "Audio decoding timed out" }
                 if (!inputEnded) {
-                    val index = decoder.dequeueInputBuffer(5_000)
+                    val index = decoder.dequeueInputBuffer(0)
                     if (index >= 0) {
                         val buffer = requireNotNull(decoder.getInputBuffer(index))
                         val count = extractor.readSampleData(buffer, 0)
@@ -55,7 +55,7 @@ internal class AudioWindowDecoder(private val context: Context) {
                         }
                     }
                 }
-                when (val index = decoder.dequeueOutputBuffer(info, 5_000)) {
+                when (val index = decoder.dequeueOutputBuffer(info, 1_000)) {
                     MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> outputFormat = decoder.outputFormat
                     else -> if (index >= 0) {
                         try {

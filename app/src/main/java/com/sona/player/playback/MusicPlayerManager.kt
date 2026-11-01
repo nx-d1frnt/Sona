@@ -31,6 +31,10 @@ class MusicPlayerManager(private val context: Context) {
 
     val playerState: StateFlow<PlayerState> = engine.playerState
 
+    val libraryAnalysis = com.sona.player.analysis.LibraryAnalysisService.state
+    fun startLibraryAnalysis(force: Boolean) = com.sona.player.analysis.LibraryAnalysisService.start(context, force)
+    fun cancelLibraryAnalysis() = com.sona.player.analysis.LibraryAnalysisService.cancel(context)
+
     fun needsLibraryAnalysis(songId: Long) = engine.needsLibraryAnalysis(songId)
 
     suspend fun analyzeLibrarySong(song: Song, force: Boolean) = engine.analyzeLibrarySong(song, force)

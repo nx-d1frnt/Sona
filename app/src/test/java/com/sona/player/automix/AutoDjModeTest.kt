@@ -20,7 +20,7 @@ class AutoDjModeTest {
     }
 
     @Test fun normalLengthSongsKeepOutroEvenWhenLoudAndTempoMatched() {
-        for (duration in listOf(120_000L, 149_999L)) {
+        for (duration in listOf(120_000L, 150_000L, 179_999L)) {
             val track = current.copy(
                 durationMs = duration, midMixOutMs = (duration * 0.60).toLong(),
                 mixOutMs = duration - 14_000L
@@ -37,19 +37,18 @@ class AutoDjModeTest {
         assertOutro(current.copy(midMixConfidence = Float.NaN, vocalSections = emptyList()))
     }
 
-    @Test fun continuousVocalsDoNotVetoMeasuredMiddleSection() {
+    @Test fun continuousVocalsKeepAutoInOutro() {
         val track = current.copy(vocalSections = listOf(VocalSection(150_000L, 220_000L, 0.9f)))
-        assertEquals(AutomixMode.QUICK_MID_MIX, track.resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
-        assertEquals(AutomixTransitionTool.ECHO_OUT, TransitionPlanner.plan(track, next, AutomixMode.AUTO_DJ).tool)
+        assertOutro(track)
     }
 
     @Test fun incompletePairAnalysisKeepsOutro() = assertOutro(current, null)
 
     @Test fun earlyPointMustLeaveEnoughMusicAndTimeBeforeOutro() {
         assertOutro(current.copy(mixOutMs = 180_000L))
-        val track = current.copy(midMixOutMs = 149_999L)
+        val track = current.copy(midMixOutMs = 180_000L)
         val cue = track.effectiveMixOutMs(AutomixMode.AUTO_DJ, next)
-        assertTrue(cue in 156_000L..210_000L)
+        assertTrue(cue in 165_000L..201_000L)
         assertTrue(track.mixOutMs - cue >= 25_000L)
     }
 
@@ -76,7 +75,7 @@ class AutoDjModeTest {
 
     private fun steadyGroove() = current.copy(durationMs = 180_000L,
         mixOutMs = 165_000L, midMixOutMs = 100_000L, midMixConfidence = 0f,
-        beatSections = listOf(BeatSection(94_000L, 130_000L, 120f, 0.5f,
+        beatSections = listOf(BeatSection(94_000L, 130_000L, 120f, 0.75f,
             (94_000L..130_000L step 500L).toList())),
         vocalSections = listOf(VocalSection(94_000L, 130_000L, 0.05f)))
 
@@ -94,22 +93,17 @@ class AutoDjModeTest {
         assertTrue(TransitionPlanner.plan(track, incoming, AutomixMode.AUTO_DJ).mixOutMs in 94_000L..126_000L)
     }
 
-    @Test fun localEvidenceCanEnableMiddleWithoutPerfectVocalPause() {
+    @Test fun middleExitRequiresRhythmOrStructureAndKnownVocalPause() {
         val track = steadyGroove()
-        assertEquals(AutomixMode.QUICK_MID_MIX, track.copy(beatSections = emptyList()).resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
-        assertOutro(track.copy(beatSections = emptyList(), vocalSections = emptyList()))
-        assertEquals(AutomixMode.QUICK_MID_MIX, track.copy(vocalSections = emptyList()).resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
-        assertEquals(AutomixMode.QUICK_MID_MIX, track.copy(vocalSections = listOf(VocalSection(94_000L, 130_000L, 0.9f))).resolveEffectiveMode(AutomixMode.AUTO_DJ, next))
+        assertOutro(track.copy(beatSections = emptyList()))
+        assertOutro(track.copy(vocalSections = emptyList()))
+        assertOutro(track.copy(beatSections = track.beatSections.map { it.copy(confidence = 0.5f) }))
+        assertOutro(track.copy(vocalSections = listOf(VocalSection(94_000L, 130_000L, 0.9f))))
+        assertOutro(current.copy(vocalSections = emptyList()))
     }
 
-    @Test fun twoAndHalfMinuteTrackCanUseMiddleAndLeavesOutroSpace() {
-        val track = steadyGroove().copy(durationMs = 150_000L, mixOutMs = 135_000L,
-            beatSections = listOf(BeatSection(80_000L, 115_000L, 120f, 0.7f,
-                (80_000L..115_000L step 500L).toList())),
-            vocalSections = listOf(VocalSection(80_000L, 115_000L, 0.05f)))
-        val cue = track.effectiveMixOutMs(AutomixMode.AUTO_DJ, next)
-        assertEquals(90_000L, cue)
-        assertTrue(track.mixOutMs - cue >= 25_000L)
+    @Test fun tracksShorterThanThreeMinutesKeepAutoOutro() {
+        assertOutro(steadyGroove().copy(durationMs = 150_000L, mixOutMs = 135_000L))
     }
 
     @Test fun explicitMidModeRemainsAvailableWithoutConfidence() {

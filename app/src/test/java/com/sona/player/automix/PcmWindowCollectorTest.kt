@@ -45,4 +45,21 @@ class PcmWindowCollectorTest {
         assertEquals(1025L, collector.window().startMs)
         assertEquals(0.25f, collector.window().samples.first(), 0f)
     }
+    @Test fun shortDecoderGapPreservesTimelineInsteadOfDiscardingWindow() {
+        val collector = PcmWindowCollector(0, 200)
+        collector.append(pcm(ShortArray(800) { 16000 }), 0, 16_000, 1, false)
+        collector.append(pcm(ShortArray(800) { 16000 }), 75_000, 16_000, 1, false)
+        val samples = collector.window().samples
+        assertEquals(2000, samples.size)
+        assertTrue(samples.sliceArray(800 until 1200).all { it == 0f })
+        assertTrue(samples[1200] > 0f)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun largeTimestampGapsRemainRejected() {
+        val collector = PcmWindowCollector(0, 1000)
+        collector.append(pcm(ShortArray(800)), 0, 16_000, 1, false)
+        collector.append(pcm(ShortArray(800)), 500_000, 16_000, 1, false)
+    }
+
 }

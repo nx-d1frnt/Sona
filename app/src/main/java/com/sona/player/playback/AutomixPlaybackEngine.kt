@@ -68,10 +68,13 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val analysisEngine = AudioAnalysisEngine(context)
+    suspend fun releaseAnalysisResources() = analysisEngine.releaseVocalDetector()
+
     fun needsLibraryAnalysis(songId: Long) = analysisEngine.needsAnalysis(songId)
 
     suspend fun analyzeLibrarySong(song: Song, force: Boolean) {
         analysisEngine.analyzeSong(song, force)
+        analysisEngine.flushPendingWrites()
         val state = _playerState.value
         _playerState.value = state.copy(automix = state.automix.copy(
             currentAnalysis = state.currentSong?.let { analysisEngine.getCached(it.id) },
@@ -158,6 +161,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             lastManualSeekTimeMs = System.currentTimeMillis()
             cancelActiveCrossfade()
             activeDeck.seekTo(index, position)
+            listeningGuard.onManualSeek()
         },
         onNext = ::skipToNext,
         onPrevious = ::skipToPrevious
@@ -182,6 +186,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     private var currentMatchResult: AutomixQueueSelector.MatchResult? = null
     private var duckMultiplier: Float = 1.0f
     private var hasAudioFocus: Boolean = false
+    private val listeningGuard = com.sona.player.automix.TrackListeningGuard()
     private var lastManualSeekTimeMs: Long = 0L
 
     private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -252,12 +257,19 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (deck !== activeDeck) return
+                listeningGuard.tick(android.os.SystemClock.elapsedRealtime(), isPlaying,
+                    deck.currentPosition, deck.playbackParameters.speed)
                 _playerState.value = _playerState.value.copy(isPlaying = isPlaying)
                 if (isPlaying) {
                     startTrackingProgress()
                 } else if (crossfadeJob?.isActive != true) {
                     stopTrackingProgress()
                 }
+            }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo, reason: Int) {
+                if (deck === activeDeck) listeningGuard.discontinuity()
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -277,6 +289,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     return // Handled by crossfade engine
                 }
 
+                listeningGuard.enter(deck.currentPosition)
                 val currentIdx = deck.currentMediaItemIndex
                 val song = playlist.getOrNull(currentIdx)
                 applyTrackNormalization(deck, song?.id)
@@ -294,6 +307,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     durationMs = duration,
                     currentPositionMs = deck.currentPosition.coerceAtLeast(0L),
                     automix = _playerState.value.automix.copy(
+                        entryPositionMs = listeningGuard.entryPositionMs,
                         currentAnalysis = song?.let { analysisEngine.getCached(it.id) },
                         transitionTargetSong = null,
                         nextMatchedSong = upcomingSong,
@@ -310,10 +324,26 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (deck !== activeDeck) return
+                if (playbackState == Player.STATE_ENDED && deck.playWhenReady && crossfadeJob?.isActive != true) {
+                    scope.launch {
+                        if (deck === activeDeck && deck.playbackState == Player.STATE_ENDED &&
+                            deck.playWhenReady && crossfadeJob?.isActive != true) advanceAfterEnd()
+                    }
+                }
                 if (playbackState == Player.STATE_READY) {
                     val duration = deck.duration.takeIf { it > 0 }
                         ?: (_playerState.value.currentSong?.durationMs ?: 0L)
                     _playerState.value = _playerState.value.copy(durationMs = duration)
+                }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                android.util.Log.e("SonaAutomix", "Deck playback error active=${deck === activeDeck}", error)
+                if (deck === activeDeck && deck.playWhenReady && crossfadeJob?.isActive != true) {
+                    scope.launch {
+                        if (deck === activeDeck && deck.playerError != null && deck.playWhenReady &&
+                            crossfadeJob?.isActive != true) advanceAfterEnd()
+                    }
                 }
             }
 
@@ -418,6 +448,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             cancelActiveCrossfade()
         }
         activeDeck.seekTo(positionMs)
+        listeningGuard.onManualSeek()
         _playerState.value = _playerState.value.copy(
             currentPositionMs = activeDeck.currentPosition.coerceAtLeast(0L)
         )
@@ -885,6 +916,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 if (crossfadeJob?.isActive != true) {
                     applyTrackNormalization(activeDeck, _playerState.value.currentSong?.id)
                 }
+                listeningGuard.tick(android.os.SystemClock.elapsedRealtime(), activeDeck.isPlaying,
+                    activeDeck.currentPosition, activeDeck.playbackParameters.speed)
                 val pos = activeDeck.currentPosition.coerceAtLeast(0L)
                 val dur = if (activeDeck.duration > 0) {
                     activeDeck.duration
@@ -894,6 +927,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
                 _playerState.value = _playerState.value.copy(
                     currentPositionMs = pos,
+                    automix = _playerState.value.automix.copy(playedMs = listeningGuard.playedMs, manualSeek = listeningGuard.manualSeek),
                     durationMs = dur
                 )
 
@@ -924,7 +958,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             ?: state.currentSong?.let { analysisEngine.getCached(it.id) }
         val nextAnalysis = analysisEngine.getCached(nextSong.id)
             ?: automix.nextMatchedAnalysis?.takeIf { it.songId == nextSong.id }
-        val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, automix.mode) else null
+        val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, automix.mode, entryPositionMs = listeningGuard.entryPositionMs) else null
         val resolvedMode = curAnalysis?.resolveEffectiveMode(automix.mode, nextAnalysis) ?: automix.mode
         val mixOutMs = plan?.mixOutMs ?: curAnalysis?.effectiveMixOutMs(automix.mode, nextAnalysis)
             ?: if (resolvedMode == AutomixMode.QUICK_MID_MIX) {
@@ -932,6 +966,10 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             } else {
                 (durationMs - 14000L).coerceAtLeast((durationMs * 0.72f).toLong())
             }
+
+        // Do not block a short/seeked track's outro indefinitely, while preserving
+        // the 45-second requirement for automatic middle exits.
+        if (!listeningGuard.allowsAutomaticTransition(durationMs - positionMs)) return
 
         if (durationMs < 20_000L) return // Skip Automix for very short audio clips
 
@@ -956,7 +994,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val curAnalysis = _playerState.value.automix.currentAnalysis
         val curEnergy = curAnalysis?.energy ?: 0.6f
         val mode = _playerState.value.automix.mode
-        val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, mode) else null
+        val plan = if (curAnalysis != null && nextAnalysis != null) TransitionPlanner.plan(curAnalysis, nextAnalysis, mode, entryPositionMs = listeningGuard.entryPositionMs) else null
         if (isPrebufferedForIndex == nextIndex && prebufferedSongId == nextSong.id && prebufferedPlan == plan) return
         val cueInMs = plan?.cueInMs ?: nextAnalysis?.effectiveCueInMs(mode, curEnergy, curAnalysis) ?: 0L
 
@@ -1000,7 +1038,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val curEnergy = curAnalysis?.energy ?: 0.6f
         val plan = if (curAnalysis != null && nextAnalysis != null) {
             TransitionPlanner.plan(curAnalysis, nextAnalysis, activeMode, customDurationMs,
-                if (customDurationMs != null) outgoingDeck.currentPosition else null)
+                if (customDurationMs != null) outgoingDeck.currentPosition else null, listeningGuard.entryPositionMs)
         } else TransitionPlan(
             tool = AutomixTransitionTool.SILKY_WARM_ISOLATOR,
             mixOutMs = outgoingDeck.currentPosition,
@@ -1015,6 +1053,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val crossfadeDurationMs = plan.durationMs
         activeTransitionTargetIndex = nextIndex
         transitionIncomingDeck = incomingDeck
+        android.util.Log.i("SonaAutomix", "transition from=${outgoingSong?.id} to=${nextSong.id} mode=$activeMode out=${outgoingDeck.currentPosition} cue=${plan.cueInMs} tool=${plan.tool} heard=${listeningGuard.playedMs} manual=${customDurationMs != null}")
         val selectedTool = plan.tool
         val outTempoRatio = plan.outgoingTempoRatio
         val inTempoRatio = plan.incomingTempoRatio
@@ -1056,12 +1095,17 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             )
         )
 
+        // Prevent native auto-advance from racing the deck swap. Let the outgoing
+        // item actually end, rather than pausing it before an unready incoming deck.
+        echoTailDeck = outgoingDeck
+        val firstUpcoming = outgoingDeck.currentMediaItemIndex + 1
+        if (firstUpcoming < outgoingDeck.mediaItemCount) outgoingDeck.removeMediaItems(firstUpcoming, outgoingDeck.mediaItemCount)
+
         crossfadeJob = scope.launch {
             // Preparation/seek can still be pending, especially after a manual Next.
             // Keep the outgoing deck audible until the incoming decoder is ready.
             val ready = withTimeoutOrNull(8_000L) {
                 while (incomingDeck.playbackState != Player.STATE_READY) {
-                    if (selectedTool != AutomixTransitionTool.ECHO_OUT) pauseDeckBeforeEnd(outgoingDeck)
                     if (incomingDeck.playerError != null || incomingDeck.playbackState == Player.STATE_ENDED) {
                         return@withTimeoutOrNull false
                     }
@@ -1071,18 +1115,10 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             } == true
             if (!ready) {
                 lastManualSeekTimeMs = System.currentTimeMillis()
-                cancelActiveCrossfade()
+                recoverFailedCrossfade()
                 return@launch
             }
 
-            if (selectedTool == AutomixTransitionTool.ECHO_OUT) {
-                // Keep the outgoing media item alone until its DSP tail has drained at EOF.
-                echoTailDeck = outgoingDeck
-                val firstUpcoming = outgoingDeck.currentMediaItemIndex + 1
-                if (firstUpcoming < outgoingDeck.mediaItemCount) {
-                    outgoingDeck.removeMediaItems(firstUpcoming, outgoingDeck.mediaItemCount)
-                }
-            }
             outgoingEq.configureEcho(plan.echoDelayMs)
             outgoingEq.setNormalizationGain(plan.outgoingGain)
             incomingEq.setNormalizationGain(plan.incomingGain, 0L)
@@ -1119,8 +1155,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 // Buffering must not advance the fade or silently promote an unready deck.
                 val playing = withTimeoutOrNull(8_000L) {
                     while (!incomingDeck.isPlaying) {
-                        if (selectedTool != AutomixTransitionTool.ECHO_OUT) pauseDeckBeforeEnd(outgoingDeck)
-                        if (incomingDeck.playerError != null || incomingDeck.playbackState == Player.STATE_ENDED) {
+                            if (incomingDeck.playerError != null || incomingDeck.playbackState == Player.STATE_ENDED) {
                             return@withTimeoutOrNull false
                         }
                         delay(25L)
@@ -1129,12 +1164,11 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 } == true
                 if (!playing) {
                     lastManualSeekTimeMs = System.currentTimeMillis()
-                    cancelActiveCrossfade()
+                    recoverFailedCrossfade()
                     return@launch
                 }
                 val t = (step.toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
 
-                if (selectedTool != AutomixTransitionTool.ECHO_OUT) pauseDeckBeforeEnd(outgoingDeck)
 
                 val activeUiTempo = if (t < 0.50f) outTempoRatio else inTempoRatio
 
@@ -1197,15 +1231,32 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun pauseDeckBeforeEnd(deck: ExoPlayer) {
-        val duration = deck.duration
-        if (deck.isPlaying && duration > 0L && deck.currentPosition >= duration - 250L) {
-            deck.pause()
-            deck.volume = 0f
+    private fun advanceAfterEnd() {
+        val nextIndex = _playerState.value.currentIndex + 1
+        if (nextIndex !in playlist.indices || activeDeck.repeatMode == Player.REPEAT_MODE_ONE) return
+        android.util.Log.w("SonaAutomix", "Fallback advance after EOF index=$nextIndex")
+        activeDeck.setMediaItems(buildMediaItems(playlist), nextIndex, 0L)
+        activeDeck.prepare()
+        play()
+    }
+
+    private fun recoverFailedCrossfade() {
+        val resume = activeDeck.playWhenReady
+        val ended = activeDeck.playbackState == Player.STATE_ENDED
+        android.util.Log.w("SonaAutomix", "Crossfade preparation/playback failed; restore queue ended=$ended")
+        cancelActiveCrossfade()
+        if (resume) {
+            if ((ended && activeDeck.playbackState == Player.STATE_ENDED) || activeDeck.playerError != null) advanceAfterEnd()
+            else play()
         }
     }
 
     private fun activateDeck(incoming: ExoPlayer, outgoing: ExoPlayer) {
+        if (activeDeck !== incoming) {
+            listeningGuard.enter(incoming.currentPosition)
+            _playerState.value = _playerState.value.copy(automix = _playerState.value.automix.copy(
+                entryPositionMs = listeningGuard.entryPositionMs))
+        }
         activeDeck = incoming
         inactiveDeck = outgoing
         mediaSession?.player = sessionPlayer

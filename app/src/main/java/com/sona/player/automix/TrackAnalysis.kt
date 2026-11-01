@@ -101,6 +101,7 @@ data class TrackAnalysis(
     val beatSections: List<BeatSection> = emptyList(),
     val vocalSections: List<VocalSection> = emptyList(),
     val loudnessSections: List<LoudnessSection> = emptyList(),
+    val featureAnalysisAttempted: Boolean = true,
     val loudnessAnalyzed: Boolean = false
 ) {
     /**
@@ -112,7 +113,7 @@ data class TrackAnalysis(
         if (mode != AutomixMode.AUTO_DJ) return mode
 
         val next = nextAnalysis ?: return AutomixMode.CLASSIC_OUTRO
-        if (durationMs < 150_000L || !bpm.isFinite() || !next.bpm.isFinite() ||
+        if (durationMs < 180_000L || !bpm.isFinite() || !next.bpm.isFinite() ||
             bpm <= 0f || next.bpm <= 0f || !energy.isFinite() || !next.energy.isFinite()
         ) return AutomixMode.CLASSIC_OUTRO
 
@@ -126,22 +127,22 @@ data class TrackAnalysis(
     internal fun autoMidCue(): Long? = automaticMidCue
 
     private fun findAutoMidCue(): Long? {
-        if (durationMs < 150_000L) return null
-        val lower = maxOf(90_000L, (durationMs * 0.52).toLong())
-        val upper = minOf((durationMs * 0.70).toLong(), mixOutMs - 25_000L,
+        if (durationMs < 180_000L) return null
+        val lower = maxOf(90_000L, (durationMs * 0.55).toLong())
+        val upper = minOf((durationMs * 0.67).toLong(), mixOutMs - 25_000L,
             durationMs - 15_000L)
         if (upper < lower) return null
-        val structural = midMixConfidence.isFinite() && midMixConfidence >= 0.60f && midMixOutMs in lower..upper
-        val beats = beatSections.filter { it.confidence >= 0.45f && it.bpm.isFinite() && it.bpm > 0f && it.beatsMs.size >= 6 }
+        val structural = midMixConfidence.isFinite() && midMixConfidence >= 0.65f && midMixOutMs in lower..upper
+        val beats = beatSections.filter { it.confidence >= 0.65f && it.bpm.isFinite() && it.bpm > 0f && it.beatsMs.size >= 6 }
             .flatMap { section -> section.beatsMs.filter { it in section.startMs..section.endMs } }.toSet()
         val candidates = ((lower..upper step 500L).toList() + beats + if (structural) listOf(midMixOutMs) else emptyList())
             .filter { it in lower..upper }
-        // Vocals rank candidates instead of vetoing the entire middle of a song.
-        // Require actual local evidence; empty/fallback profiles still use the outro.
+        // AUTO requires a measured vocal pause plus structural or reliable rhythm
+        // evidence. Vocal classification alone cannot justify skipping the rest of a song.
         val target = if (structural) midMixOutMs else (durationMs * 0.60).toLong()
         return candidates.filter { cue ->
-            MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) != null || cue in beats ||
-                (structural && cue in midMixOutMs..midMixOutMs + 8000L)
+            val structuralCue = structural && cue in midMixOutMs..midMixOutMs + 8000L
+            (cue in beats || structuralCue) && MusicalCueSelector.isVocalPause(this, cue)
         }.minByOrNull { cue ->
             val voice = MusicalCueSelector.vocalRisk(this, cue, cue + 3000L) ?: 0.65f
             voice * 0.45f + kotlin.math.abs(cue - target) / 20_000f * 0.20f -
@@ -160,6 +161,7 @@ data class TrackAnalysis(
     ): Long {
         val resolvedMode = outgoingAnalysis?.resolveEffectiveMode(mode, this) ?: mode
         val base = when {
+            mode == AutomixMode.AUTO_DJ -> cueInMs
             resolvedMode == AutomixMode.QUICK_MID_MIX -> deepCueInMs
             mode != AutomixMode.AUTO_DJ && outgoingEnergy >= 0.68f &&
                 deepCueInMs > cueInMs + 3500L -> deepCueInMs
@@ -170,8 +172,7 @@ data class TrackAnalysis(
         if (mode == AutomixMode.AUTO_DJ && outgoingAnalysis != null) {
             val position = outgoingAnalysis.autoMidCue() ?: outgoingAnalysis.mixOutMs
             val voice = MusicalCueSelector.vocalRisk(outgoingAnalysis, position, position + 3000L)
-            return MusicalCueSelector.djIncoming(this, base, overlap,
-                preferCore = resolvedMode == AutomixMode.QUICK_MID_MIX, outgoingVoice = voice ?: 0.65f)
+            return MusicalCueSelector.djIncoming(this, base, overlap, outgoingVoice = voice ?: 0.65f)
         }
         return MusicalCueSelector.incoming(this, base, overlap)
     }
@@ -234,6 +235,9 @@ data class SavedTransition(
  * Live state of an active or upcoming Automix transition and preserved queue transition chain.
  */
 data class AutomixTransitionState(
+    val entryPositionMs: Long = 0L,
+    val playedMs: Long = 0L,
+    val manualSeek: Boolean = false,
     val isEnabled: Boolean = true,
     val mode: AutomixMode = AutomixMode.AUTO_DJ,
     val isAnalyzing: Boolean = false,

@@ -33,9 +33,23 @@ internal class PcmWindowCollector(private val startMs: Long, private val duratio
             val timeUs = presentationTimeUs + frame * 1_000_000L / sampleRate
             if (timeUs < startUs || timeUs >= endUs || size == output.size) continue
             if (firstTimeUs == null) firstTimeUs = timeUs
-            lastTimeUs?.let { require(timeUs - it <= maxOf(2000L, 2_000_000L / sampleRate)) {
-                "Discontinuous PCM timestamps"
-            } }
+            val last = lastTimeUs
+            if (last != null && timeUs <= last) continue // Some codecs repeat priming frames.
+            if (last != null && timeUs - last > maxOf(2000L, 2_000_000L / sampleRate)) {
+                val gapUs = timeUs - last
+                require(gapUs <= 50_000L) { "Discontinuous PCM timestamps gapUs=$gapUs rate=$sampleRate" }
+                // Preserve source time across a short codec priming/padding gap. Compressing
+                // it would shift every stored beat/vocal timestamp after the gap.
+                val expectedSize = (((timeUs - requireNotNull(firstTimeUs)) * 16_000L) / 1_000_000L)
+                    .toInt().coerceAtMost(output.size)
+                while (size < expectedSize) output[size++] = 0f
+                inputFrame = 0L
+                nextOutputFrame = 0.0
+                previous = 0f
+                lowPass = 0f
+                lowPass2 = 0f
+                if (size == output.size) continue
+            }
             lastTimeUs = timeUs
             var mono = 0f
             for (channel in 0 until channels) {
