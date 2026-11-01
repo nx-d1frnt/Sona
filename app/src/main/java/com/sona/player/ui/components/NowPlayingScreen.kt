@@ -42,8 +42,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -88,10 +91,38 @@ fun NowPlayingScreen(
         label = "ArtworkCornerRadius"
     )
 
-    Surface(
-        color = MaterialTheme.colorScheme.background,
-        modifier = modifier.fillMaxSize()
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
     ) {
+        // Full screen background artwork with high-radius blur
+        if (song.albumArtUri != null) {
+            AsyncImage(
+                model = song.albumArtUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(50.dp)
+            )
+        }
+
+        // Gradient overlay fading from subtle tint at top to dark surface at bottom
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.75f),
+                            MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
+                        )
+                    )
+                )
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
