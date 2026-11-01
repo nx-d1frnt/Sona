@@ -191,8 +191,21 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (deck !== activeDeck) return
-                if (crossfadeJob?.isActive == true) return // Handled by crossfade engine
+                if (deck !== activeDeck) {
+                    // Prevent inactive/outgoing deck from auto-advancing and playing the next track during a crossfade
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                        deck.pause()
+                        deck.volume = 0f
+                    }
+                    return
+                }
+                if (crossfadeJob?.isActive == true) {
+                    if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) {
+                        deck.pause()
+                        deck.volume = 0f
+                    }
+                    return // Handled by crossfade engine
+                }
 
                 val currentIdx = deck.currentMediaItemIndex
                 val song = playlist.getOrNull(currentIdx)
@@ -367,6 +380,11 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         val currentSong = playlist.getOrNull(currentIndex) ?: return
 
         analysisJob = scope.launch {
+            // Wait if an active crossfade is running so hardware MediaCodec is 100% dedicated to dual-deck playback
+            while (crossfadeJob?.isActive == true && isActive) {
+                delay(250)
+            }
+
             _playerState.value = _playerState.value.copy(
                 automix = _playerState.value.automix.copy(isAnalyzing = true)
             )
@@ -377,28 +395,36 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 automix = _playerState.value.automix.copy(currentAnalysis = curAnalysis)
             )
 
-            // 2. Analyze the next 8 candidate tracks in the queue
-            val maxLookahead = (currentIndex + 8).coerceAtMost(playlist.lastIndex)
+            // 2. Analyze the next 5 candidate tracks in the queue with gentle pacing
+            val maxLookahead = (currentIndex + 5).coerceAtMost(playlist.lastIndex)
             for (i in (currentIndex + 1)..maxLookahead) {
                 if (!isActive) return@launch
+                while (crossfadeJob?.isActive == true && isActive) {
+                    delay(250)
+                }
                 val candidate = playlist.getOrNull(i) ?: continue
                 analysisEngine.analyzeSong(candidate)
                 // Update smart match incrementally as candidates finish analyzing
                 if (_playerState.value.automix.isEnabled && crossfadeJob?.isActive != true) {
                     applyOneStepAheadMatch(currentIndex, curAnalysis)
                 }
+                delay(120)
             }
 
             _playerState.value = _playerState.value.copy(
                 automix = _playerState.value.automix.copy(isAnalyzing = false)
             )
 
-            // 3. Continue indexing further tracks in the queue at low priority
-            val furtherLimit = (currentIndex + 20).coerceAtMost(playlist.lastIndex)
+            // 3. Continue indexing a few further tracks in the queue at low priority
+            val furtherLimit = (currentIndex + 10).coerceAtMost(playlist.lastIndex)
             for (i in (maxLookahead + 1)..furtherLimit) {
                 if (!isActive) return@launch
+                while (crossfadeJob?.isActive == true && isActive) {
+                    delay(300)
+                }
                 val candidate = playlist.getOrNull(i) ?: continue
                 analysisEngine.analyzeSong(candidate)
+                delay(250)
             }
         }
     }
@@ -530,20 +556,15 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         val crossfadeDurationMs = (curAnalysis?.crossfadeDurationMs ?: 7500L).coerceIn(5000L, 10_000L)
 
-        val (outTempoRatio, inTempoRatio) = if (curAnalysis != null && nextAnalysis != null) {
-            AutomixQueueSelector.computeTempoSyncRatios(curAnalysis.bpm, nextAnalysis.bpm)
-        } else {
-            1.0f to 1.0f
-        }
-
         crossfadeJob = scope.launch {
             // Initialize DJ EQ Transition (incoming starts with High-Pass Bass Cut)
             outgoingEq.updateOutgoingEq(0f)
             incomingEq.updateIncomingEq(0f)
 
-            // Start incoming deck at volume 0 with pitch-preserving tempo sync
+            // Start incoming deck at volume 0 and natural 1.0x speed (avoids SonicAudioProcessor buffer stalls)
+            outgoingDeck.playbackParameters = PlaybackParameters.DEFAULT
+            incomingDeck.playbackParameters = PlaybackParameters.DEFAULT
             incomingDeck.volume = 0f
-            incomingDeck.playbackParameters = PlaybackParameters(inTempoRatio, 1.0f)
             incomingDeck.play()
 
             val stepMs = 50L
@@ -554,7 +575,14 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 if (!isActive) break
                 val t = (step.toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
 
-                // 1. Update real-time DJ Biquad EQ Filters (Bass Swap at t=0.45..0.58 + Low-Pass Tail)
+                // Guard: pause outgoing deck right before EOF so it never auto-advances to the next track
+                val outDur = outgoingDeck.duration
+                if (outgoingDeck.isPlaying && outDur > 0L && outgoingDeck.currentPosition >= outDur - 250L) {
+                    outgoingDeck.pause()
+                    outgoingDeck.volume = 0f
+                }
+
+                // 1. Update real-time DJ Isolator EQ Filters (Bass Swap at t=0.45..0.58 + Low-Pass Tail)
                 outgoingEq.updateOutgoingEq(t)
                 incomingEq.updateIncomingEq(t)
 
@@ -562,23 +590,10 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 val outGain = cos(t * PI * 0.5).toFloat()
                 val inGain = sin(t * PI * 0.5).toFloat()
 
-                outgoingDeck.volume = (outGain * duckMultiplier).coerceIn(0f, 1f)
-                incomingDeck.volume = (inGain * duckMultiplier).coerceIn(0f, 1f)
-
-                // 3. Smooth pitch-preserving tempo sync (±4% max)
-                val currentDisplayTempo: Float
-                if (t <= 0.5f) {
-                    val frac = t / 0.5f
-                    val outSpeed = 1.0f + (outTempoRatio - 1.0f) * frac
-                    outgoingDeck.playbackParameters = PlaybackParameters(outSpeed, 1.0f)
-                    incomingDeck.playbackParameters = PlaybackParameters(inTempoRatio, 1.0f)
-                    currentDisplayTempo = inTempoRatio
-                } else {
-                    val frac = (t - 0.5f) / 0.5f
-                    val inSpeed = inTempoRatio + (1.0f - inTempoRatio) * frac
-                    incomingDeck.playbackParameters = PlaybackParameters(inSpeed, 1.0f)
-                    currentDisplayTempo = inSpeed
+                if (outgoingDeck.isPlaying) {
+                    outgoingDeck.volume = (outGain * duckMultiplier).coerceIn(0f, 1f)
                 }
+                incomingDeck.volume = (inGain * duckMultiplier).coerceIn(0f, 1f)
 
                 // At the peak of the transition (t >= 0.50f), swap active deck so UI & MediaSession
                 // smoothly transition cover art, Monet palette, and metadata to the incoming track!
@@ -598,7 +613,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                             currentAnalysis = nextAnalysis,
                             transitionProgress = t,
                             isTransitioning = true,
-                            activeTempoRatio = currentDisplayTempo
+                            activeTempoRatio = 1.0f
                         )
                     )
                 } else {
@@ -606,7 +621,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                         automix = _playerState.value.automix.copy(
                             isTransitioning = true,
                             transitionProgress = t,
-                            activeTempoRatio = currentDisplayTempo
+                            activeTempoRatio = 1.0f
                         )
                     )
                 }

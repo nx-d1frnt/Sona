@@ -31,7 +31,7 @@ class AudioAnalysisEngine(private val context: Context) {
 
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
     private val cacheFile = File(context.filesDir, "sona_automix_analysis_v1.json")
-    private val codecSemaphore = Semaphore(2) // Limit concurrent hardware decoders to save battery
+    private val codecSemaphore = Semaphore(1) // Limit to 1 background hardware decoder so real-time audio never stutters
 
     init {
         loadCacheFromDisk()
@@ -59,11 +59,11 @@ class AudioAnalysisEngine(private val context: Context) {
     private fun decodeAndAnalyze(song: Song): TrackAnalysis {
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
-        // 1. Sample 3 key windows: Intro (first 10s), Core (12s in middle), Outro (last 20s)
+        // 1. Sample 3 compact windows: Intro (first 6s), Core (8s in middle), Outro (last 10s)
         val introFrames = extractEnergyEnvelope(
             song = song,
             startMs = 0L,
-            windowDurationMs = min(10_000L, durationMs / 3),
+            windowDurationMs = min(6_000L, durationMs / 3),
             frameDurationMs = 50 // 20 Hz envelope for intro silence detection
         )
 
@@ -71,11 +71,11 @@ class AudioAnalysisEngine(private val context: Context) {
         val coreFrames = extractEnergyEnvelope(
             song = song,
             startMs = coreStartMs,
-            windowDurationMs = min(12_000L, durationMs / 2),
+            windowDurationMs = min(8_000L, durationMs / 2),
             frameDurationMs = 20 // 50 Hz high-res envelope for BPM onset autocorrelation
         )
 
-        val outroWindowMs = min(20_000L, durationMs / 3)
+        val outroWindowMs = min(10_000L, durationMs / 3)
         val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
         val outroFrames = extractEnergyEnvelope(
             song = song,
@@ -236,8 +236,8 @@ class AudioAnalysisEngine(private val context: Context) {
                         outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
                         val shortBuffer = outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer()
 
-                        // Downsample by step 2 for speed while preserving RMS accuracy
-                        val step = 2
+                        // Downsample by step 4 for ultra-low CPU usage while preserving RMS envelope
+                        val step = 4
                         var idx = 0
                         val limit = shortBuffer.remaining()
                         while (idx < limit && frameIndex < maxFrames) {
@@ -284,7 +284,7 @@ class AudioAnalysisEngine(private val context: Context) {
         envelopeHz: Float,
         songId: Long
     ): Float {
-        if (envelope.size < 80) return fallbackBpmForId(songId)
+        if (envelope.size < 60) return fallbackBpmForId(songId)
 
         // 1. First-order positive onset flux (accentuates drum transients / beats)
         val onset = FloatArray(envelope.size)
