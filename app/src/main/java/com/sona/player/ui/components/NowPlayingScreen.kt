@@ -403,101 +403,17 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(18.dp))
 
-                // Главный ряд управления: Крупная пилюля Play/Pause с динамическим цветом обложки + морфинг
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Previous Button with expressive dark glass container
-                    Surface(
-                        shape = CircleShape,
-                        color = Color.White.copy(alpha = 0.12f),
-                        modifier = Modifier.size(60.dp)
-                    ) {
-                        IconButton(
-                            onClick = onPreviousClick,
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.SkipPrevious,
-                                contentDescription = "Previous",
-                                tint = Color.White,
-                                modifier = Modifier.size(30.dp)
-                            )
-                        }
-                    }
-
-                    // Expressive Hero Pill Button (Play / Pause) — динамический цвет и морфинг углов
-                    val playPillWidth by animateDpAsState(
-                        targetValue = if (isPlaying) 176.dp else 196.dp,
-                        animationSpec = spring(
-                            dampingRatio = Spring.DampingRatioMediumBouncy,
-                            stiffness = Spring.StiffnessMediumLow
-                        ),
-                        label = "PlayPillWidth"
-                    )
-                    val playPillCorner by animateDpAsState(
-                        targetValue = if (isPlaying) 24.dp else 34.dp,
-                        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-                        label = "PlayPillCorner"
-                    )
-
-                    Surface(
-                        onClick = onPlayPauseClick,
-                        shape = RoundedCornerShape(playPillCorner),
-                        color = palette.primaryAccent,
-                        shadowElevation = 12.dp,
-                        modifier = Modifier
-                            .height(68.dp)
-                            .width(playPillWidth)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            AnimatedContent(
-                                targetState = isPlaying,
-                                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                                label = "PlayIconTransition"
-                            ) { playing ->
-                                Icon(
-                                    imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                    contentDescription = if (playing) "Pause" else "Play",
-                                    tint = palette.onPrimaryAccent,
-                                    modifier = Modifier.size(34.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (isPlaying) "Pause" else "Play",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.onPrimaryAccent
-                            )
-                        }
-                    }
-
-                    // Next Button with expressive dark glass container
-                    Surface(
-                        shape = CircleShape,
-                        color = Color.White.copy(alpha = 0.12f),
-                        modifier = Modifier.size(60.dp)
-                    ) {
-                        IconButton(
-                            onClick = onNextClick,
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.SkipNext,
-                                contentDescription = "Next",
-                                tint = Color.White,
-                                modifier = Modifier.size(30.dp)
-                            )
-                        }
-                    }
-                }
+                // Вариант 1: Ансамбль кнопок с живым морфингом формы (M3 Expressive Shape Morphing) и пружинной физикой
+                ExpressiveTransportControls(
+                    isPlaying = isPlaying,
+                    primaryAccent = palette.primaryAccent,
+                    onPrimaryAccent = palette.onPrimaryAccent,
+                    secondaryAccent = palette.secondaryAccent,
+                    onPlayPauseClick = onPlayPauseClick,
+                    onPreviousClick = onPreviousClick,
+                    onNextClick = onNextClick,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 Spacer(modifier = Modifier.height(20.dp))
 
