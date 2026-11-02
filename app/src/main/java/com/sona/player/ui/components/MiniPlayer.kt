@@ -84,7 +84,7 @@ fun MiniPlayer(
                         if (song.albumArtUri != null) {
                             AsyncImage(
                                 model = song.albumArtUri,
-                                contentDescription = "Album art",
+                                contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.content_desc_album_art),
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.size(48.dp)
                             )
@@ -128,14 +128,14 @@ fun MiniPlayer(
                     ) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play"
+                            contentDescription = androidx.compose.ui.res.stringResource(if (isPlaying) com.sona.player.R.string.action_pause else com.sona.player.R.string.action_play)
                         )
                     }
 
                     IconButton(onClick = onNextClick) {
                         Icon(
                             imageVector = Icons.Rounded.SkipNext,
-                            contentDescription = "Skip Next"
+                            contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_next_track)
                         )
                     }
                 }

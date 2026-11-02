@@ -64,6 +64,10 @@ class MusicPlayerManager(private val context: Context) {
 
     fun skipToQueueIndex(index: Int) = engine.skipToQueueIndex(index)
 
+    fun playNext(song: Song) = engine.playNext(song)
+
+    fun addToQueue(song: Song) = engine.addToQueue(song)
+
     fun moveQueueItem(fromIndex: Int, toIndex: Int) = engine.moveQueueItem(fromIndex, toIndex)
 
     fun removeFromQueue(index: Int) = engine.removeFromQueue(index)

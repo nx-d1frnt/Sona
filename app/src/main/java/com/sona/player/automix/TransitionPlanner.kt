@@ -12,7 +12,8 @@ internal data class TransitionPlan(
     val echoDelayMs: Float = 320f,
     val handoffFraction: Float = 0.5f,
     val outgoingGain: Float = 1f,
-    val incomingGain: Float = 1f
+    val incomingGain: Float = 1f,
+    val quality: TransitionQuality? = null
 )
 
 /** One decision for queue previews and playback, including optional manual-skip position. */
@@ -116,11 +117,12 @@ internal object TransitionPlanner {
         cue = cue.coerceIn(0L, MusicalCueSelector.maxEntryCue(to, duration))
         val finalRatios = if (tool == AutomixTransitionTool.ECHO_OUT) 1f to 1f
             else MusicalCueSelector.tempoRatiosAt(from, to, out, cue)
-        return TransitionPlan(tool, out, cue, duration,
+        val plan = TransitionPlan(tool, out, cue, duration,
             finalRatios.first, finalRatios.second,
             echoDelayMs = if (period != null) period * if (from.energy >= 0.8f) 0.5f else 1f else 320f,
             handoffFraction = handoff,
             outgoingGain = LoudnessNormalizer.gain(from, out), incomingGain = LoudnessNormalizer.gain(to, cue))
+        return plan.copy(quality = TransitionQualityEvaluator.evaluate(from, to, plan))
     }
 
     /** Re-evaluate the outgoing window for this particular incoming vocal, not just the song alone. */

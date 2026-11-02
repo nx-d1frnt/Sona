@@ -39,7 +39,7 @@ class LibraryAnalysisService : Service() {
                 ContextCompat.startForegroundService(context, Intent(context, LibraryAnalysisService::class.java)
                     .putExtra("force", force))
             } catch (_: Exception) {
-                mutableState.value = LibraryAnalysisState(message = "Android не разрешил запуск фонового анализа. Попробуйте снова из настроек.")
+                mutableState.value = LibraryAnalysisState(message = context.getString(com.sona.player.R.string.analysis_error_start_failed))
             }
         }
         fun cancel(context: Context) {
@@ -56,7 +56,7 @@ class LibraryAnalysisService : Service() {
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, "Анализ музыкальной библиотеки", NotificationManager.IMPORTANCE_LOW))
+            NotificationChannel(CHANNEL, getString(com.sona.player.R.string.notification_channel_analysis), NotificationManager.IMPORTANCE_LOW))
         wakeLock = getSystemService(PowerManager::class.java).newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK, "Sona:LibraryAnalysis").apply { setReferenceCounted(false) }
     }
@@ -78,7 +78,7 @@ class LibraryAnalysisService : Service() {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             } else startForeground(NOTIFICATION, notification())
         } catch (_: Exception) {
-            finish(message = "Android не разрешил фоновый анализ. Попробуйте запустить его снова из настроек.")
+            finish(message = getString(com.sona.player.R.string.analysis_error_service_failed))
             return START_NOT_STICKY
         }
         if (work?.isActive == true) return START_STICKY
@@ -163,7 +163,7 @@ class LibraryAnalysisService : Service() {
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                finish(message = "Не удалось прочитать библиотеку. Проверьте доступ к аудиофайлам и запустите анализ снова.")
+                finish(message = getString(com.sona.player.R.string.analysis_error_read_failed))
             } finally {
                 withContext(NonCancellable) {
                     AutomixPlaybackEngine.getInstance(applicationContext).releaseAnalysisResources()
@@ -181,11 +181,11 @@ class LibraryAnalysisService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Анализ библиотеки: ${state.completed} из ${state.total}")
-            .setContentText(if (state.waitingForPlayback) "Ожидание паузы в воспроизведении" else state.title.ifEmpty { "Подготовка" })
+            .setContentTitle(getString(com.sona.player.R.string.analysis_notification_title, state.completed, state.total))
+            .setContentText(if (state.waitingForPlayback) getString(com.sona.player.R.string.analysis_waiting_for_playback) else state.title.ifEmpty { getString(com.sona.player.R.string.analysis_preparing) })
             .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true).setSilent(true)
             .setProgress(state.total, state.completed, state.total == 0)
-            .addAction(0, "Остановить", cancel).build()
+            .addAction(0, getString(com.sona.player.R.string.analysis_stop), cancel).build()
     }
 
     private fun publish(force: Boolean = false) {
@@ -209,7 +209,7 @@ class LibraryAnalysisService : Service() {
     }
 
     override fun onTimeout(startId: Int, fgsType: Int) {
-        finish(message = "Android остановил длительную обработку. Готовые результаты сохранены; анализ можно продолжить.")
+        finish(message = getString(com.sona.player.R.string.analysis_timeout))
     }
     override fun onDestroy() {
         work?.cancel()

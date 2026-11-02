@@ -114,7 +114,7 @@ fun ExpressiveTransportControls(
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Icon(
                     imageVector = Icons.Rounded.SkipPrevious,
-                    contentDescription = "Previous",
+                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_previous),
                     tint = Color.White,
                     modifier = Modifier.size(32.dp)
                 )
@@ -197,17 +197,10 @@ fun ExpressiveTransportControls(
                     ) {
                         Icon(
                             imageVector = if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (playing) "Pause" else "Play",
+                            contentDescription = androidx.compose.ui.res.stringResource(if (playing) com.sona.player.R.string.action_pause else com.sona.player.R.string.action_play),
                             tint = onPrimaryAccent,
                             modifier = Modifier.size(30.dp)
                         )
-//                        Spacer(modifier = Modifier.width(8.dp))
-//                        Text(
-//                           // text = if (playing) "Pause" else "Play",
-//                            style = MaterialTheme.typography.titleMedium,
-//                            fontWeight = FontWeight.Bold,
-//                            color = onPrimaryAccent
-//                        )
                     }
                 }
             }
@@ -269,7 +262,7 @@ fun ExpressiveTransportControls(
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                 Icon(
                     imageVector = Icons.Rounded.SkipNext,
-                    contentDescription = "Next",
+                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_next),
                     tint = Color.White,
                     modifier = Modifier.size(32.dp)
                 )

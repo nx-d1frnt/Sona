@@ -134,7 +134,7 @@ fun AutomixQueueSheet(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Queue & Automix Chain",
+                            text = androidx.compose.ui.res.stringResource(com.sona.player.R.string.queue_sheet_title),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
@@ -196,7 +196,7 @@ fun AutomixQueueSheet(
                         IconButton(onClick = onDismiss) {
                             Icon(
                                 imageVector = Icons.Rounded.Close,
-                                contentDescription = "Close Queue",
+                                contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_close_queue),
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(18.dp)
                             )
@@ -345,7 +345,7 @@ private fun QueueTrackRow(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.GraphicEq,
-                            contentDescription = "Now Playing",
+                            contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.now_playing_title),
                             tint = palette.primaryAccent,
                             modifier = Modifier.size(22.dp)
                         )
@@ -360,14 +360,14 @@ private fun QueueTrackRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (isCurrent) {
                         Text(
-                            text = "NOW • ",
+                            text = androidx.compose.ui.res.stringResource(com.sona.player.R.string.queue_badge_now),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.ExtraBold,
                             color = palette.primaryAccent
                         )
                     } else if (isTransitionTarget) {
                         Text(
-                            text = "MIXING IN • ",
+                            text = androidx.compose.ui.res.stringResource(com.sona.player.R.string.queue_badge_mixing_in),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.ExtraBold,
                             color = palette.secondaryAccent
@@ -426,7 +426,7 @@ private fun QueueTrackRow(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.KeyboardArrowUp,
-                            contentDescription = "Move Up",
+                            contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_move_up),
                             tint = Color.White.copy(alpha = 0.75f),
                             modifier = Modifier.size(18.dp)
                         )
@@ -439,7 +439,7 @@ private fun QueueTrackRow(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = "Move Down",
+                            contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_move_down),
                             tint = Color.White.copy(alpha = 0.75f),
                             modifier = Modifier.size(18.dp)
                         )
@@ -452,7 +452,7 @@ private fun QueueTrackRow(
                     ) {
                         Icon(
                             imageVector = Icons.Rounded.Close,
-                            contentDescription = "Remove from queue",
+                            contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_remove_from_queue),
                             tint = Color.White.copy(alpha = 0.45f),
                             modifier = Modifier.size(16.dp)
                         )
@@ -560,7 +560,7 @@ private fun TransitionConnectorItem(
                                 val prefix = if (isPastTransition) "Mixed: " else ""
                                 "$prefix${savedTransition.transitionTool.shortBadge} • $bpmFrom→$bpmTo BPM$cueTag"
                             }
-                            else -> "Smart DJ EQ Transition (Analyzing...)"
+                            else -> androidx.compose.ui.res.stringResource(com.sona.player.R.string.queue_analyzing)
                         }
 
                         Text(
@@ -585,6 +585,16 @@ private fun TransitionConnectorItem(
                             }
                         )
                     }
+                }
+
+                savedTransition?.quality?.let { quality ->
+                    Text(
+                        text = androidx.compose.ui.res.stringResource(
+                            com.sona.player.R.string.queue_transition_quality,
+                            quality.scorePercent, quality.confidencePercent),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = Color.White.copy(alpha = if (isPastTransition) 0.4f else 0.7f)
+                    )
                 }
 
                 if (isLiveTransition) {

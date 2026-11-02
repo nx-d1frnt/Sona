@@ -6,9 +6,8 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Selects the best next track "one step ahead" from the remaining unplayed queue
- * based on BPM harmonic proximity (including 0.5x/2x tempo) and energy continuity,
- * and automatically selects the optimal DJ transition toolset for each pair.
+ * Builds a greedy queue chain using track compatibility and predicted quality of each actual plan.
+ * Each link inspects up to 25 upcoming candidates; analysis and planning use cached audio features.
  */
 object AutomixQueueSelector {
 
@@ -27,7 +26,10 @@ object AutomixQueueSelector {
         currentAnalysis: TrackAnalysis,
         queue: List<Song>,
         currentIndex: Int,
-        analysisProvider: (Long) -> TrackAnalysis?
+        analysisProvider: (Long) -> TrackAnalysis?,
+        mode: AutomixMode = AutomixMode.AUTO_DJ,
+        entryPositionMs: Long = 0L,
+        canSelectCandidate: (Int) -> Boolean = { true }
     ): MatchResult? {
         if (currentIndex < 0 || currentIndex + 1 >= queue.size) return null
 
@@ -48,7 +50,7 @@ object AutomixQueueSelector {
         val searchLimit = min(queue.size - 1, currentIndex + 25)
         for (idx in (currentIndex + 1)..searchLimit) {
             val candidate = queue[idx]
-            if (candidate.id == currentSong.id) continue
+            if (candidate.id == currentSong.id || !canSelectCandidate(idx)) continue
 
             val candidateAnalysis = analysisProvider(candidate.id) ?: continue
             val rawScore = computeCompatibilityScore(currentAnalysis, candidateAnalysis)
@@ -58,7 +60,11 @@ object AutomixQueueSelector {
                 candidateArtist != null && candidateArtist in recentArtists -> 0.07f
                 else -> 0f
             }
-            val selectionScore = (rawScore - artistPenalty).coerceAtLeast(0.05f)
+            val plan = TransitionPlanner.plan(currentAnalysis, candidateAnalysis, mode, entryPositionMs = entryPositionMs)
+            val quality = plan.quality!!
+            val confidence = quality.confidencePercent / 100f
+            val planScore = quality.scorePercent / 100f * (0.65f + confidence * 0.35f)
+            val selectionScore = (rawScore * 0.4f + planScore * 0.6f - artistPenalty).coerceAtLeast(0.05f)
             candidates += ScoredCandidate(idx, candidate, candidateAnalysis, rawScore, selectionScore)
         }
 
@@ -69,10 +75,10 @@ object AutomixQueueSelector {
             // over the same "universal" tracks while keeping queue previews stable.
             val topPool = candidates
                 .filter { it.selectionScore >= maxSel - 0.045f }
-                .sortedByDescending { it.selectionScore }
+                .sortedWith(compareByDescending<ScoredCandidate> { it.selectionScore }.thenBy { it.song.id })
                 .take(4)
             val seed = (currentSong.id * 31L + currentIndex * 17L).toInt()
-            val pickIdx = kotlin.math.abs(seed) % topPool.size
+            val pickIdx = Math.floorMod(seed, topPool.size)
             topPool[pickIdx]
         } else null
 
@@ -81,21 +87,50 @@ object AutomixQueueSelector {
         val chosenAnalysis = chosen?.analysis ?: analysisProvider(chosenSong.id) ?: return null
         val finalScore = chosen?.rawScore ?: computeCompatibilityScore(currentAnalysis, chosenAnalysis)
 
-        val (outRatio, inRatio) = computeTempoSyncRatios(
-            bpmOut = localBpm(currentAnalysis, currentAnalysis.mixOutMs),
-            bpmIn = localBpm(chosenAnalysis, chosenAnalysis.cueInMs)
-        )
-        val tool = TransitionPlanner.plan(currentAnalysis, chosenAnalysis, AutomixMode.AUTO_DJ).tool
+        val plan = TransitionPlanner.plan(currentAnalysis, chosenAnalysis, mode, entryPositionMs = entryPositionMs)
 
         return MatchResult(
             candidateIndexInQueue = bestIndex,
             song = chosenSong,
             analysis = chosenAnalysis,
-            matchScorePercent = (finalScore * 100f).roundToInt().coerceIn(60, 99),
-            outgoingTempoRatio = outRatio,
-            incomingTempoRatio = inRatio,
-            transitionTool = tool
+            matchScorePercent = (finalScore * 100f).roundToInt().coerceIn(0, 100),
+            outgoingTempoRatio = plan.outgoingTempoRatio,
+            incomingTempoRatio = plan.incomingTempoRatio,
+            transitionTool = plan.tool
         )
+    }
+
+    /** Greedy chain over cached analyses. Locked adjacencies move as indivisible blocks. */
+    fun buildSmartQueue(
+        queue: List<Song>, currentIndex: Int, analysisProvider: (Long) -> TrackAnalysis?,
+        lockedNextForSongIds: Set<Long> = emptySet(), mode: AutomixMode = AutomixMode.AUTO_DJ,
+        entryPositionMs: Long = 0L
+    ): List<Song> {
+        if (currentIndex !in queue.indices) return queue
+        val result = queue.toMutableList()
+        var entry = entryPositionMs
+        for (index in currentIndex until result.lastIndex) {
+            val current = result[index]
+            val analysis = analysisProvider(current.id)
+            if (analysis != null && current.id !in lockedNextForSongIds) {
+                val match = findBestNextTrack(current, analysis, result, index, analysisProvider,
+                    mode, entry, canSelectCandidate = { candidate ->
+                        result[candidate - 1].id !in lockedNextForSongIds
+                    })
+                if (match != null && match.candidateIndexInQueue != index + 1) {
+                    val start = match.candidateIndexInQueue
+                    var end = start
+                    while (end < result.lastIndex && result[end].id in lockedNextForSongIds) end++
+                    val block = result.subList(start, end + 1).toList()
+                    result.subList(start, end + 1).clear()
+                    result.addAll(index + 1, block)
+                }
+            }
+            val next = analysisProvider(result[index + 1].id)
+            entry = if (analysis != null && next != null)
+                TransitionPlanner.plan(analysis, next, mode, entryPositionMs = entry).cueInMs else 0L
+        }
+        return result
     }
 
     private fun normalizeArtist(artist: String?): String? {
@@ -216,11 +251,12 @@ object AutomixQueueSelector {
         fromAnalysis: TrackAnalysis,
         toAnalysis: TrackAnalysis,
         mode: AutomixMode = AutomixMode.CLASSIC_OUTRO,
-        isCompleted: Boolean = false
+        isCompleted: Boolean = false,
+        entryPositionMs: Long = 0L
     ): SavedTransition {
         val rawScore = computeCompatibilityScore(fromAnalysis, toAnalysis)
-        val scorePct = (rawScore * 100f).roundToInt().coerceIn(62, 99)
-        val plan = TransitionPlanner.plan(fromAnalysis, toAnalysis, mode)
+        val scorePct = (rawScore * 100f).roundToInt().coerceIn(0, 100)
+        val plan = TransitionPlanner.plan(fromAnalysis, toAnalysis, mode, entryPositionMs = entryPositionMs)
         val tool = plan.tool
         val syncPct = ((plan.incomingTempoRatio - 1.0f) * 100f).roundToInt()
 
@@ -235,7 +271,8 @@ object AutomixQueueSelector {
             transitionTool = tool,
             transitionStyle = "${tool.shortBadge} (${tool.toolsSummary})",
             tempoSyncPercent = syncPct,
-            isCompleted = isCompleted
+            isCompleted = isCompleted,
+            quality = plan.quality
         )
     }
 

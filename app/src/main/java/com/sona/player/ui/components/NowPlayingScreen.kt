@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -104,6 +105,10 @@ fun NowPlayingScreen(
     queue: List<Song> = emptyList(),
     currentIndex: Int = 0,
     automixState: AutomixTransitionState = AutomixTransitionState(),
+    isFavorite: Boolean = false,
+    onToggleFavorite: () -> Unit = {},
+    onMoreClick: () -> Unit = {},
+    onShareClick: () -> Unit = {},
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
     onPreviousClick: () -> Unit,
@@ -299,14 +304,14 @@ fun NowPlayingScreen(
                 IconButton(onClick = onDismiss) {
                     Icon(
                         imageVector = Icons.Rounded.KeyboardArrowDown,
-                        contentDescription = "Collapse player",
+                        contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_collapse_player),
                         tint = Color.White,
                         modifier = Modifier.size(32.dp)
                     )
                 }
 
                 Text(
-                    text = "NOW PLAYING",
+                    text = androidx.compose.ui.res.stringResource(com.sona.player.R.string.now_playing_title),
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp,
@@ -327,8 +332,6 @@ fun NowPlayingScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp)
             ) {
-                var isFavorite by remember { mutableStateOf(false) }
-
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
@@ -367,10 +370,10 @@ fun NowPlayingScreen(
                             color = Color.White.copy(alpha = 0.14f),
                             modifier = Modifier.size(44.dp)
                         ) {
-                            IconButton(onClick = { /* Share */ }) {
+                            IconButton(onClick = onShareClick) {
                                 Icon(
                                     imageVector = Icons.Rounded.Share,
-                                    contentDescription = "Share",
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_share),
                                     tint = Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -391,10 +394,10 @@ fun NowPlayingScreen(
                             color = favoriteBgColor,
                             modifier = Modifier.size(44.dp)
                         ) {
-                            IconButton(onClick = { isFavorite = !isFavorite }) {
+                            IconButton(onClick = onToggleFavorite) {
                                 Icon(
                                     imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                    contentDescription = "Favorite",
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_favorite),
                                     tint = favoriteIconColor,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -605,8 +608,8 @@ fun NowPlayingScreen(
                         ) {
                             IconButton(onClick = { isQueueSheetOpen = !isQueueSheetOpen }) {
                                 Icon(
-                                    imageVector = Icons.Rounded.QueueMusic,
-                                    contentDescription = "Queue",
+                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_queue),
                                     tint = if (isQueueSheetOpen) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f),
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -643,7 +646,7 @@ fun NowPlayingScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = "Automix Mode",
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_automix_mode),
                                     tint = if (isAutomixEnabled) palette.secondaryAccent else Color.White.copy(alpha = 0.7f),
                                     modifier = Modifier.size(18.dp)
                                 )
@@ -689,7 +692,7 @@ fun NowPlayingScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Shuffle,
-                                    contentDescription = "Shuffle Mode",
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_shuffle_mode),
                                     tint = shuffleTint,
                                     modifier = Modifier.size(19.dp)
                                 )
@@ -720,7 +723,7 @@ fun NowPlayingScreen(
                                 }
                                 Icon(
                                     imageVector = icon,
-                                    contentDescription = "Repeat",
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_repeat),
                                     tint = if (isRepeatActive) palette.onPrimaryContainer else Color.White.copy(alpha = 0.85f),
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -734,10 +737,10 @@ fun NowPlayingScreen(
                         color = Color.White.copy(alpha = 0.12f),
                         modifier = Modifier.size(40.dp)
                     ) {
-                        IconButton(onClick = { /* More options */ }) {
+                        IconButton(onClick = onMoreClick) {
                             Icon(
                                 imageVector = Icons.Rounded.MoreVert,
-                                contentDescription = "More",
+                                contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_more),
                                 tint = Color.White.copy(alpha = 0.85f),
                                 modifier = Modifier.size(20.dp)
                             )

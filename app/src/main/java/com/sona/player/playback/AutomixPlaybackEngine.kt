@@ -41,6 +41,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -49,7 +50,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * Dual-Deck ExoPlayer engine powering Sona's intelligent background Automix:
  * - Hybrid background PCM analysis (BPM, energy, cue-in, mix-out) with local disk cache
- * - Dynamic "one-step-ahead" smart queue matching by BPM & energy continuity
+ * - Background transition-aware smart queue chaining
  * - Equal-Power Crossfade (cos/sin curves) + subtle pitch-preserving tempo sync (up to ±6%)
  */
 class AutomixPlaybackEngine private constructor(private val context: Context) {
@@ -208,7 +209,6 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
     private var isPrebufferedForIndex: Int = -1
     private var activeTransitionTargetIndex: Int = -1
-    private var currentMatchResult: AutomixQueueSelector.MatchResult? = null
     private var duckMultiplier: Float = 1.0f
     private var hasAudioFocus: Boolean = false
     private val listeningGuard = com.sona.player.automix.TrackListeningGuard()
@@ -321,7 +321,6 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 val duration = deck.duration.takeIf { it > 0 } ?: (song?.durationMs ?: 0L)
 
                 isPrebufferedForIndex = -1
-                currentMatchResult = null
 
                 val upcomingSong = playlist.getOrNull(currentIdx + 1)
                 val upcomingAnalysis = upcomingSong?.let { analysisEngine.getCached(it.id) }
@@ -343,6 +342,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 )
 
                 if (song != null) {
+                    scope.launch(Dispatchers.IO) {
+                        com.sona.player.data.database.UserLibraryDatabaseHelper.getInstance(context).recordPlay(song.id)
+                    }
                     triggerAnalysisAndSmartQueue(currentIdx)
                 }
             }
@@ -442,6 +444,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         )
 
         triggerAnalysisAndSmartQueue(safeIndex)
+        scope.launch(Dispatchers.IO) {
+            com.sona.player.data.database.UserLibraryDatabaseHelper.getInstance(context).recordPlay(initialSong.id)
+        }
     }
 
     fun togglePlayPause() {
@@ -599,6 +604,72 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         )
     }
 
+    /**
+     * Inserts a track immediately after the currently playing track in the queue.
+     */
+    fun playNext(song: Song) {
+        if (playlist.isEmpty()) {
+            playQueue(listOf(song), 0)
+            return
+        }
+        val curIdx = _playerState.value.currentIndex
+        val insertIndex = (curIdx + 1).coerceAtMost(playlist.size)
+        playlist.add(insertIndex, song)
+        originalQueueOrder.add(song)
+        if (activeDeck.mediaItemCount >= insertIndex) {
+            val mediaItem = buildMediaItems(listOf(song)).first()
+            activeDeck.addMediaItem(insertIndex, mediaItem)
+        }
+        playlist.getOrNull(curIdx)?.let { curSong ->
+            userLockedNextForSongId.add(curSong.id)
+        }
+        isPrebufferedForIndex = -1
+        rebuildSavedTransitions(curIdx)
+        val nextSong = playlist.getOrNull(curIdx + 1)
+        val nextAnalysis = nextSong?.let { analysisEngine.getCached(it.id) }
+        val topTransition = if (nextSong != null && curIdx in playlist.indices) {
+            savedTransitions[SavedTransition.key(playlist[curIdx].id, nextSong.id)]
+        } else null
+
+        _playerState.value = _playerState.value.copy(
+            currentQueue = playlist.toList(),
+            automix = _playerState.value.automix.copy(
+                nextMatchedSong = nextSong,
+                nextMatchedAnalysis = nextAnalysis,
+                matchScorePercent = topTransition?.matchScorePercent ?: _playerState.value.automix.matchScorePercent,
+                savedTransitions = savedTransitions.toMap()
+            )
+        )
+    }
+
+    /**
+     * Appends a track to the end of the active playback queue.
+     */
+    fun addToQueue(song: Song) {
+        if (playlist.isEmpty()) {
+            playQueue(listOf(song), 0)
+            return
+        }
+        playlist.add(song)
+        originalQueueOrder.add(song)
+        val mediaItem = buildMediaItems(listOf(song)).first()
+        activeDeck.addMediaItem(mediaItem)
+
+        val curIdx = _playerState.value.currentIndex
+        rebuildSavedTransitions(curIdx)
+        val nextSong = playlist.getOrNull(curIdx + 1)
+        val nextAnalysis = nextSong?.let { analysisEngine.getCached(it.id) }
+
+        _playerState.value = _playerState.value.copy(
+            currentQueue = playlist.toList(),
+            automix = _playerState.value.automix.copy(
+                nextMatchedSong = nextSong,
+                nextMatchedAnalysis = nextAnalysis,
+                savedTransitions = savedTransitions.toMap()
+            )
+        )
+    }
+
     fun skipToPrevious() {
         if (crossfadeJob?.isActive == true) {
             cancelActiveCrossfade()
@@ -650,7 +721,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     }
                 }
                 ShuffleMode.SMART -> {
-                    // Smart DJ Shuffle will immediately match and move the best harmonic track to curIdx + 1
+                    // Smart DJ Shuffle will build a transition-aware chain through the upcoming queue
                     userLockedNextForSongId.remove(playlist[curIdx].id)
                 }
             }
@@ -730,126 +801,69 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         }
     }
 
-    /**
-     * Analyzes the current track and upcoming candidates in the background.
-     * When [ShuffleMode.SMART] is active, selects the best harmonic BPM/Energy match and moves it
-     * "one step ahead" (to currentIndex + 1); otherwise preserves sequential or random queue order.
-     */
+    /** Analyze a stable snapshot so reordering cannot skip candidates. SMART continues through the queue. */
     private fun triggerAnalysisAndSmartQueue(currentIndex: Int) {
         analysisJob?.cancel()
         val currentSong = playlist.getOrNull(currentIndex) ?: return
-
+        val smart = _playerState.value.shuffleMode == ShuffleMode.SMART
+        val candidates = playlist.drop(currentIndex + 1).let { if (smart) it else it.take(12) }
         analysisJob = scope.launch {
-            // Wait if an active crossfade is running so hardware MediaCodec is 100% dedicated to dual-deck playback
-            while (crossfadeJob?.isActive == true && isActive) {
-                delay(250)
+            fun stillCurrent() = _playerState.value.currentIndex == currentIndex &&
+                playlist.getOrNull(currentIndex)?.id == currentSong.id
+            suspend fun awaitPlayback() {
+                while (crossfadeJob?.isActive == true && isActive) delay(250)
             }
-
-            val maxLookahead = (currentIndex + 5).coerceAtMost(playlist.lastIndex)
-            val anyNeedsDecoding = (currentIndex..maxLookahead).any { idx ->
-                val s = playlist.getOrNull(idx)
-                s != null && analysisEngine.needsAnalysis(s.id)
-            }
-
-            if (anyNeedsDecoding) {
+            try {
+                awaitPlayback()
+                if (!stillCurrent()) return@launch
                 _playerState.value = _playerState.value.copy(
-                    automix = _playerState.value.automix.copy(isAnalyzing = true)
-                )
-            }
-
-            // 1. Analyze current song first so the UI gets its exact BPM & Automix Zone right away
-            val curAnalysis = analysisEngine.analyzeSong(currentSong)
-            rebuildSavedTransitions(currentIndex)
-            val initialNextSong = playlist.getOrNull(currentIndex + 1)
-            val initialNextAnalysis = initialNextSong?.let { analysisEngine.getCached(it.id) }
-            _playerState.value = _playerState.value.copy(
-                automix = _playerState.value.automix.copy(
-                    currentAnalysis = curAnalysis,
-                    nextMatchedSong = initialNextSong,
-                    nextMatchedAnalysis = initialNextAnalysis,
-                    analyzedTracks = analysisEngine.getAllCached(),
-                    savedTransitions = savedTransitions.toMap()
-                )
-            )
-
-            // 2. Analyze the next 5 candidate tracks in the queue (instant if cached on disk!)
-            for (i in (currentIndex + 1)..maxLookahead) {
-                if (!isActive) return@launch
-                while (crossfadeJob?.isActive == true && isActive) {
-                    delay(250)
-                }
-                val candidate = playlist.getOrNull(i) ?: continue
-                val wasCached = !analysisEngine.needsAnalysis(candidate.id)
-                if (!wasCached) {
+                    automix = _playerState.value.automix.copy(isAnalyzing = true))
+                val currentAnalysis = analysisEngine.analyzeSong(currentSong)
+                if (!stillCurrent()) return@launch
+                _playerState.value = _playerState.value.copy(
+                    automix = _playerState.value.automix.copy(currentAnalysis = currentAnalysis))
+                refreshAnalyzedQueue(currentIndex)
+                for (candidate in candidates) {
+                    if (!isActive || !stillCurrent()) return@launch
+                    if (!analysisEngine.needsAnalysis(candidate.id)) continue
+                    awaitPlayback()
+                    if (playlist.none { it.id == candidate.id }) continue
                     analysisEngine.analyzeSong(candidate)
-                }
-                // Only reorder the queue when Smart DJ Shuffle (ShuffleMode.SMART) is active!
-                if (_playerState.value.shuffleMode == ShuffleMode.SMART && crossfadeJob?.isActive != true) {
-                    applyOneStepAheadMatch(currentIndex, curAnalysis)
-                } else {
-                    rebuildSavedTransitions(currentIndex)
-                    val nextSong = playlist.getOrNull(currentIndex + 1)
-                    val nextAnalysis = nextSong?.let { analysisEngine.getCached(it.id) }
-                    val topPairKey = if (nextSong != null) SavedTransition.key(currentSong.id, nextSong.id) else ""
-                    val topScore = savedTransitions[topPairKey]?.matchScorePercent ?: 85
-                    _playerState.value = _playerState.value.copy(
-                        automix = _playerState.value.automix.copy(
-                            nextMatchedSong = nextSong,
-                            nextMatchedAnalysis = nextAnalysis,
-                            matchScorePercent = topScore,
-                            analyzedTracks = analysisEngine.getAllCached(),
-                            savedTransitions = savedTransitions.toMap()
-                        )
-                    )
-                }
-                if (!wasCached) {
-                    delay(120)
-                }
-            }
-
-            rebuildSavedTransitions(currentIndex)
-            val finalNextSong = playlist.getOrNull(currentIndex + 1)
-            val finalNextAnalysis = finalNextSong?.let { analysisEngine.getCached(it.id) }
-            _playerState.value = _playerState.value.copy(
-                automix = _playerState.value.automix.copy(
-                    isAnalyzing = false,
-                    nextMatchedSong = finalNextSong,
-                    nextMatchedAnalysis = finalNextAnalysis,
-                    analyzedTracks = analysisEngine.getAllCached(),
-                    savedTransitions = savedTransitions.toMap()
-                )
-            )
-
-            // 3. Continue indexing further tracks in the queue at low priority
-            val furtherLimit = (currentIndex + 12).coerceAtMost(playlist.lastIndex)
-            for (i in (maxLookahead + 1)..furtherLimit) {
-                if (!isActive) return@launch
-                while (crossfadeJob?.isActive == true && isActive) {
-                    delay(300)
-                }
-                val candidate = playlist.getOrNull(i) ?: continue
-                val wasCached = !analysisEngine.needsAnalysis(candidate.id)
-                if (!wasCached) {
-                    analysisEngine.analyzeSong(candidate)
-                    if (_playerState.value.shuffleMode == ShuffleMode.SMART && crossfadeJob?.isActive != true) {
-                        applyOneStepAheadMatch(currentIndex, curAnalysis)
-                    } else {
-                        rebuildSavedTransitions(currentIndex)
-                        _playerState.value = _playerState.value.copy(
-                            automix = _playerState.value.automix.copy(
-                                analyzedTracks = analysisEngine.getAllCached(),
-                                savedTransitions = savedTransitions.toMap()
-                            )
-                        )
-                    }
+                    if (!stillCurrent()) return@launch
+                    refreshAnalyzedQueue(currentIndex)
                     delay(200)
                 }
+            } finally {
+                if (stillCurrent() && analysisJob == coroutineContext[Job]) _playerState.value = _playerState.value.copy(
+                    automix = _playerState.value.automix.copy(isAnalyzing = false))
             }
         }
     }
 
+    private suspend fun refreshAnalyzedQueue(currentIndex: Int) {
+        if (_playerState.value.shuffleMode == ShuffleMode.SMART && crossfadeJob?.isActive != true) {
+            applySmartQueueChain(currentIndex)
+        }
+        rebuildSavedTransitions(currentIndex)
+        val current = playlist.getOrNull(currentIndex)
+        val next = playlist.getOrNull(currentIndex + 1)
+        val transition = if (current != null && next != null)
+            savedTransitions[SavedTransition.key(current.id, next.id)] else null
+        _playerState.value = _playerState.value.copy(
+            currentQueue = playlist.toList(),
+            automix = _playerState.value.automix.copy(
+                nextMatchedSong = next,
+                nextMatchedAnalysis = next?.let { analysisEngine.getCached(it.id) },
+                matchScorePercent = transition?.matchScorePercent ?: 0,
+                analyzedTracks = analysisEngine.getAllCached(),
+                savedTransitions = savedTransitions.toMap()
+            )
+        )
+    }
+
     /** Inputs a saved transition was planned from; analyses are immutable, so identity means "unchanged". */
-    private data class TransitionSource(val mode: AutomixMode, val from: TrackAnalysis, val to: TrackAnalysis)
+    private data class TransitionSource(val mode: AutomixMode, val from: TrackAnalysis, val to: TrackAnalysis,
+                                        val entryPositionMs: Long = 0L)
     private class PendingTransition(val index: Int, val key: String, val fromId: Long, val toId: Long,
                                     val source: TransitionSource, val completed: Boolean)
     private val transitionSources = mutableMapOf<String, TransitionSource>()
@@ -871,7 +885,13 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             val key = SavedTransition.key(songA.id, songB.id)
             val existing = savedTransitions[key]
             val completed = (i < currentIndex) || (existing?.isCompleted == true)
-            val source = TransitionSource(activeMode, analysisA, analysisB)
+            if (existing != null && completed) {
+                // Preserve the actual plan and its rating once this pair has played.
+                if (!existing.isCompleted) savedTransitions[key] = existing.copy(isCompleted = true)
+                continue
+            }
+            val source = TransitionSource(activeMode, analysisA, analysisB,
+                if (i == currentIndex) listeningGuard.entryPositionMs else 0L)
             if (existing != null && transitionSources[key]?.matches(source) == true) {
                 if (existing.isCompleted != completed) savedTransitions[key] = existing.copy(isCompleted = completed)
             } else {
@@ -893,7 +913,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                             fromAnalysis = p.source.from,
                             toAnalysis = p.source.to,
                             mode = p.source.mode,
-                            isCompleted = p.completed
+                            isCompleted = p.completed,
+                            entryPositionMs = p.source.entryPositionMs
                         )
                     }
                 }
@@ -910,7 +931,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     }
 
     private fun TransitionSource.matches(other: TransitionSource) =
-        mode == other.mode && from === other.from && to === other.to
+        mode == other.mode && from === other.from && to === other.to && entryPositionMs == other.entryPositionMs
 
     private fun publishSavedTransitions() {
         val state = _playerState.value
@@ -931,68 +952,28 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         transitionSources.clear()
     }
 
-    private fun applyOneStepAheadMatch(currentIndex: Int, currentAnalysis: TrackAnalysis) {
-        val currentSong = playlist.getOrNull(currentIndex) ?: return
-        if (currentIndex + 1 >= playlist.size) return
-
-        // If the user or a previous chain lock already locked the next track for currentSong, preserve it!
-        if (userLockedNextForSongId.contains(currentSong.id)) {
-            rebuildSavedTransitions(currentIndex)
-            val lockedNext = playlist.getOrNull(currentIndex + 1)
-            val lockedAnalysis = lockedNext?.let { analysisEngine.getCached(it.id) }
-            val lockedTransition = if (lockedNext != null) {
-                savedTransitions[SavedTransition.key(currentSong.id, lockedNext.id)]
-            } else null
-            _playerState.value = _playerState.value.copy(
-                currentQueue = playlist.toList(),
-                automix = _playerState.value.automix.copy(
-                    nextMatchedSong = lockedNext,
-                    nextMatchedAnalysis = lockedAnalysis,
-                    matchScorePercent = lockedTransition?.matchScorePercent ?: 90,
-                    analyzedTracks = analysisEngine.getAllCached(),
-                    savedTransitions = savedTransitions.toMap()
-                )
-            )
-            return
+    private suspend fun applySmartQueueChain(currentIndex: Int) {
+        val snapshot = playlist.toList()
+        val analyses = analysisEngine.getAllCached().toMap()
+        val locks = userLockedNextForSongId.toSet()
+        val mode = _playerState.value.automix.mode
+        val entry = listeningGuard.entryPositionMs
+        val ordered = withContext(Dispatchers.Default) {
+            AutomixQueueSelector.buildSmartQueue(snapshot, currentIndex, {
+                coroutineContext.ensureActive()
+                analyses[it]
+            }, locks, mode, entry)
         }
-
-        val match = AutomixQueueSelector.findBestNextTrack(
-            currentSong = currentSong,
-            currentAnalysis = currentAnalysis,
-            queue = playlist,
-            currentIndex = currentIndex,
-            analysisProvider = { id -> analysisEngine.getCached(id) }
-        ) ?: return
-
-        currentMatchResult = match
-
-        // Move the best matched track into slot (currentIndex + 1) both in playlist and in activeDeck
-        val targetNextSlot = currentIndex + 1
-        if (match.candidateIndexInQueue != targetNextSlot &&
-            match.candidateIndexInQueue in playlist.indices
-        ) {
-            val matchedSong = playlist.removeAt(match.candidateIndexInQueue)
-            playlist.add(targetNextSlot, matchedSong)
-            if (activeDeck.mediaItemCount > match.candidateIndexInQueue) {
-                activeDeck.moveMediaItem(match.candidateIndexInQueue, targetNextSlot)
-            }
+        // Planning yields: discard results if playback or a manual queue edit changed the inputs.
+        if (_playerState.value.shuffleMode != ShuffleMode.SMART ||
+            _playerState.value.currentIndex != currentIndex || crossfadeJob?.isActive == true ||
+            playlist != snapshot || userLockedNextForSongId != locks ||
+            _playerState.value.automix.mode != mode || listeningGuard.entryPositionMs != entry) return
+        if (ordered != snapshot) {
+            playlist.clear()
+            playlist.addAll(ordered)
+            syncUpcomingDeckMediaItems(currentIndex)
             isPrebufferedForIndex = -1
-        }
-
-        rebuildSavedTransitions(currentIndex)
-
-        // Only update nextMatchedSong if match.song is NOT the current song
-        if (match.song.id != currentSong.id) {
-            _playerState.value = _playerState.value.copy(
-                currentQueue = playlist.toList(),
-                automix = _playerState.value.automix.copy(
-                    nextMatchedSong = match.song,
-                    nextMatchedAnalysis = match.analysis,
-                    matchScorePercent = match.matchScorePercent,
-                    analyzedTracks = analysisEngine.getAllCached(),
-                    savedTransitions = savedTransitions.toMap()
-                )
-            )
         }
     }
 
@@ -1160,10 +1141,11 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 transitionStyle = selectedTool.displayName,
                 overlapDurationMs = plan.durationMs,
                 cueInMs = plan.cueInMs,
+                quality = plan.quality,
                 tempoSyncPercent = ((plan.incomingTempoRatio - 1f) * 100f).roundToInt()
             )
             // Mark as up to date so a background rebuild doesn't replace the live plan's details.
-            transitionSources[key] = TransitionSource(activeMode, curAnalysis, nextAnalysis)
+            transitionSources[key] = TransitionSource(activeMode, curAnalysis, nextAnalysis, listeningGuard.entryPositionMs)
             userLockedNextForSongId.add(outgoingSong.id)
         }
 
@@ -1406,6 +1388,9 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             )
         )
         triggerAnalysisAndSmartQueue(targetIndex)
+        scope.launch(Dispatchers.IO) {
+            com.sona.player.data.database.UserLibraryDatabaseHelper.getInstance(context).recordPlay(targetSong.id)
+        }
     }
 
     private fun completeCrossfadeImmediately() {

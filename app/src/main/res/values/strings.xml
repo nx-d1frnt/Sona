@@ -1,3 +1,187 @@
 <resources>
     <string name="app_name">Sona</string>
+
+    <!-- Navigation & Common Actions -->
+    <string name="tab_home">Home</string>
+    <string name="tab_tracks">Tracks</string>
+    <string name="tab_playlists">Playlists</string>
+    <string name="tab_albums">Albums</string>
+    <string name="tab_artists">Artists</string>
+
+    <string name="action_search">Search</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_sort">Sort</string>
+    <string name="action_settings">Settings</string>
+    <string name="action_more">More</string>
+    <string name="action_more_options">Actions</string>
+    <string name="action_back">Back</string>
+    <string name="action_create">Create</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_close">Close</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_share">Share</string>
+    <string name="action_copy">Copy</string>
+    <string name="action_play">Play</string>
+    <string name="action_play_all">Play All</string>
+    <string name="action_shuffle">Shuffle</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_previous">Previous track</string>
+    <string name="action_next">Next track</string>
+    <string name="action_next_track">Next track</string>
+    <string name="action_favorite">Favorite</string>
+    <string name="action_queue">Queue</string>
+    <string name="action_automix_mode">Automix Mode</string>
+    <string name="action_shuffle_mode">Shuffle Mode</string>
+    <string name="action_repeat">Repeat</string>
+    <string name="action_collapse_player">Collapse player</string>
+
+    <!-- Home Screen -->
+    <string name="home_greeting_morning">Good morning</string>
+    <string name="home_greeting_afternoon">Good afternoon</string>
+    <string name="home_greeting_evening">Good evening</string>
+    <string name="home_greeting_night">Good night</string>
+    <string name="home_quick_mix">Quick Automix</string>
+    <string name="home_quick_mix_desc">Continuous DJ transition mix</string>
+    <string name="home_section_recently_played">Recently Played</string>
+    <string name="home_section_favorites">Favorite Tracks</string>
+    <string name="home_section_albums">Featured Albums</string>
+    <string name="home_section_artists">Featured Artists</string>
+    <string name="home_jump_back_in">Jump Back In</string>
+    <string name="home_start_listening">Start Listening</string>
+    <string name="home_empty_library">No music found. Grant permission or add audio files to your device.</string>
+    <string name="home_see_all">See all</string>
+    <string name="home_stats_summary">%1$d tracks • %2$d albums • %3$d artists</string>
+
+    <!-- Search & Empty States -->
+    <string name="search_placeholder">Search songs, artists, albums…</string>
+    <string name="permission_required_message">Permission needed to access audio files</string>
+    <string name="permission_grant_button">Grant Permission</string>
+    <string name="no_audio_files_found">No audio files found</string>
+    <string name="share_track_title">Share track</string>
+    <string name="content_desc_album_art">Album art</string>
+
+    <!-- Sorting -->
+    <string name="sort_title_asc">Title (A-Z)</string>
+    <string name="sort_title_desc">Title (Z-A)</string>
+    <string name="sort_date_added_desc">Recently added</string>
+    <string name="sort_date_added_asc">Oldest added</string>
+    <string name="sort_artist_asc">By artist</string>
+    <string name="sort_duration_desc">Duration (longest first)</string>
+    <string name="sort_duration_asc">Duration (shortest first)</string>
+
+    <!-- Track Options Context Menu -->
+    <string name="menu_play_next">Play next</string>
+    <string name="menu_play_next_desc">Insert in queue after current track</string>
+    <string name="menu_add_to_queue">Add to queue</string>
+    <string name="menu_add_to_queue_desc">Append to end of queue</string>
+    <string name="menu_add_favorite">Add to favorites</string>
+    <string name="menu_remove_favorite">Remove from favorites</string>
+    <string name="menu_add_to_playlist">Add to playlist</string>
+    <string name="menu_audio_details">Track details</string>
+    <string name="menu_audio_details_desc">Bitrate, codec, sample rate, size and path</string>
+    <string name="menu_share">Share</string>
+    <string name="menu_delete">Delete from device</string>
+
+    <!-- Track Details Dialog -->
+    <string name="details_dialog_title">Audio Specifications</string>
+    <string name="details_album">Album</string>
+    <string name="details_year">Year</string>
+    <string name="details_track_number">Track number</string>
+    <string name="details_audio_specs">Technical Specifications</string>
+    <string name="details_bitrate">Bitrate</string>
+    <string name="details_sample_rate">Sample rate</string>
+    <string name="details_channels">Channels</string>
+    <string name="details_file_size">File size</string>
+    <string name="details_mime_type">MIME type</string>
+    <string name="details_automix_title">Automix Analysis</string>
+    <string name="details_bpm">Tempo (BPM)</string>
+    <string name="details_key">Musical key</string>
+    <string name="details_energy">Track energy</string>
+    <string name="details_key_determining">Detecting…</string>
+    <string name="details_file_path">File path</string>
+    <string name="details_path_copied_toast">Path copied to clipboard</string>
+
+    <!-- Technical Specs Strings -->
+    <string name="unknown">Unknown</string>
+    <string name="file_size_mb">%.2f MB</string>
+    <string name="bitrate_kbps">%d kbps</string>
+    <string name="bitrate_vbr_unknown">VBR / Unknown</string>
+    <string name="sample_rate_khz">%.1f kHz</string>
+    <string name="channels_mono">Mono</string>
+    <string name="channels_stereo">Stereo</string>
+    <string name="channels_5_1">5.1 Surround</string>
+    <string name="channels_7_1">7.1 Surround</string>
+    <string name="channels_count">%d channels</string>
+
+    <!-- Delete Confirmation Dialog -->
+    <string name="delete_track_dialog_title">Delete audio file?</string>
+    <string name="delete_track_dialog_message">Track \"%s\" will be permanently deleted from your device.</string>
+    <string name="dialog_delete_track_title">Delete track?</string>
+    <string name="dialog_delete_track_message">File will be permanently deleted from your device.</string>
+
+    <!-- Playlists -->
+    <string name="playlists_smart_section">Smart Mixes</string>
+    <string name="playlists_my_section">My Playlists</string>
+    <string name="smart_playlist_favorites">Favorites</string>
+    <string name="smart_playlist_favorites_count">%d tracks</string>
+    <string name="smart_playlist_recently_added">Recently Added</string>
+    <string name="smart_playlist_recently_added_count">%d tracks</string>
+    <string name="smart_playlist_most_played">Most Played</string>
+    <string name="smart_playlist_most_played_count">%d tracks</string>
+    <string name="smart_playlist_favorites_subtitle">%d favorite tracks</string>
+    <string name="smart_playlist_recently_added_subtitle">%d newly added tracks</string>
+    <string name="smart_playlist_most_played_subtitle">%d most frequently played tracks</string>
+    <string name="playlist_empty_custom">%d tracks</string>
+    <string name="playlists_empty">No playlists created yet</string>
+    <string name="playlist_is_empty">Playlist is empty</string>
+    <string name="playlist_delete">Delete playlist</string>
+    <string name="playlist_add_dialog_title">Add to Playlist</string>
+    <string name="playlist_new_button">New playlist</string>
+    <string name="playlist_new_title">New Playlist</string>
+    <string name="playlist_name_label">Playlist name</string>
+    <string name="playlist_tracks_count">%d tracks</string>
+
+    <!-- Albums and Artists -->
+    <string name="albums_empty">No albums found</string>
+    <string name="artists_empty">No artists found</string>
+    <string name="artist_summary_count">%1$d tracks • %2$d albums</string>
+
+    <!-- Now Playing & Queue Sheet -->
+    <string name="now_playing_title">NOW PLAYING</string>
+    <string name="queue_sheet_title">Queue &amp; Automix Chain</string>
+    <string name="action_close_queue">Close queue</string>
+    <string name="queue_badge_now">NOW • </string>
+    <string name="queue_badge_mixing_in">MIXING IN • </string>
+    <string name="action_move_up">Move up</string>
+    <string name="action_move_down">Move down</string>
+    <string name="action_remove_from_queue">Remove from queue</string>
+    <string name="queue_analyzing">Smart DJ EQ Transition (Analyzing…)</string>
+
+    <!-- Settings Dialog & Library Analysis -->
+    <string name="settings_automix_title">Automix Settings</string>
+    <string name="settings_library_analysis_title">Full Library Analysis</string>
+    <string name="settings_library_analysis_description">Detects vocals, beat grid, volume normalization and mix points. Results are cached on device for instant playback transitions.</string>
+    <string name="settings_library_analysis_background_hint">Processing runs with screen off and pauses during playback. Progress and controls are available in notifications.</string>
+    <string name="settings_force_analysis_checkbox">Recalculate already analyzed tracks</string>
+    <string name="settings_force_analysis_warning">Reanalyzing all tracks may take considerable time and battery.</string>
+    <string name="analysis_waiting_for_playback">Waiting for playback pause</string>
+    <string name="analysis_in_progress">Analyzing: %s</string>
+    <string name="analysis_cancelled">Analysis stopped</string>
+    <string name="analysis_completed">Analysis completed</string>
+    <string name="analysis_progress_count">%1$d of %2$d</string>
+    <string name="analysis_stop">Stop</string>
+    <string name="analysis_recalculate_all">Reanalyze all tracks</string>
+    <string name="analysis_start">Analyze library</string>
+    <string name="analysis_need_library_access">Audio file access permission is required.</string>
+
+    <!-- Service Notifications & Errors -->
+    <string name="notification_channel_analysis">Music Library Analysis</string>
+    <string name="analysis_error_start_failed">Android prevented starting background analysis. Please retry from settings.</string>
+    <string name="analysis_error_service_failed">Android stopped background service. Please retry from settings.</string>
+    <string name="analysis_error_read_failed">Failed to read audio files. Please check permissions and retry.</string>
+    <string name="analysis_notification_title">Library Analysis: %1$d of %2$d</string>
+    <string name="analysis_preparing">Preparing…</string>
+    <string name="analysis_timeout">Android stopped long-running analysis. Completed results are saved; you can continue anytime.</string>
+    <string name="queue_transition_quality">Predicted transition: %1$d%% • Confidence: %2$d%%</string>
 </resources>

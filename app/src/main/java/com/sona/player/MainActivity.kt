@@ -1,17 +1,23 @@
 package com.sona.player
 
 import android.Manifest
+import android.app.Activity
+import android.app.RecoverableSecurityException
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import com.sona.player.data.model.Song
 import com.sona.player.data.repository.AudioRepository
+import com.sona.player.data.repository.UserLibraryRepository
 import com.sona.player.playback.MusicPlayerManager
 import com.sona.player.ui.main.MainScreen
 import com.sona.player.ui.main.MainViewModel
@@ -30,18 +36,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val deleteLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            viewModel.loadSongs()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         val repository = AudioRepository(applicationContext)
+        val userLibraryRepository = UserLibraryRepository(applicationContext)
         playerManager = MusicPlayerManager(applicationContext)
         playerManager.init()
 
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return MainViewModel(repository, playerManager) as T
+                return MainViewModel(repository, userLibraryRepository, playerManager) as T
             }
         })[MainViewModel::class.java]
 
@@ -51,8 +66,33 @@ class MainActivity : ComponentActivity() {
             SonaTheme {
                 MainScreen(
                     viewModel = viewModel,
-                    onRequestPermission = { checkAndRequestStoragePermission() }
+                    onRequestPermission = { checkAndRequestStoragePermission() },
+                    onDeleteSong = { song -> performDeleteSong(song) }
                 )
+            }
+        }
+    }
+
+    private fun performDeleteSong(song: Song) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                val pendingIntent = MediaStore.createDeleteRequest(contentResolver, listOf(song.contentUri))
+                deleteLauncher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        } else {
+            try {
+                val count = contentResolver.delete(song.contentUri, null, null)
+                if (count > 0) {
+                    viewModel.loadSongs()
+                }
+            } catch (e: Exception) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && e is RecoverableSecurityException) {
+                    deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
+                } else {
+                    e.printStackTrace()
+                }
             }
         }
     }

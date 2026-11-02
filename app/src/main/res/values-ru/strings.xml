@@ -1,0 +1,187 @@
+<resources>
+    <string name="app_name">Sona</string>
+
+    <!-- Navigation & Common Actions -->
+    <string name="tab_home">Главная</string>
+    <string name="tab_tracks">Треки</string>
+    <string name="tab_playlists">Плейлисты</string>
+    <string name="tab_albums">Альбомы</string>
+    <string name="tab_artists">Исполнители</string>
+
+    <string name="action_search">Поиск</string>
+    <string name="action_clear">Очистить</string>
+    <string name="action_sort">Сортировка</string>
+    <string name="action_settings">Настройки</string>
+    <string name="action_more">Ещё</string>
+    <string name="action_more_options">Действия</string>
+    <string name="action_back">Назад</string>
+    <string name="action_create">Создать</string>
+    <string name="action_save">Сохранить</string>
+    <string name="action_cancel">Отмена</string>
+    <string name="action_close">Закрыть</string>
+    <string name="action_delete">Удалить</string>
+    <string name="action_share">Поделиться</string>
+    <string name="action_copy">Копировать</string>
+    <string name="action_play">Слушать</string>
+    <string name="action_play_all">Слушать всё</string>
+    <string name="action_shuffle">Микс</string>
+    <string name="action_pause">Пауза</string>
+    <string name="action_previous">Предыдущий трек</string>
+    <string name="action_next">Следующий трек</string>
+    <string name="action_next_track">Следующий трек</string>
+    <string name="action_favorite">В избранное</string>
+    <string name="action_queue">Очередь</string>
+    <string name="action_automix_mode">Режим Automix</string>
+    <string name="action_shuffle_mode">Режим Shuffle</string>
+    <string name="action_repeat">Повтор</string>
+    <string name="action_collapse_player">Свернуть плеер</string>
+
+    <!-- Home Screen -->
+    <string name="home_greeting_morning">Доброе утро</string>
+    <string name="home_greeting_afternoon">Добрый день</string>
+    <string name="home_greeting_evening">Добрый вечер</string>
+    <string name="home_greeting_night">Доброй ночи</string>
+    <string name="home_quick_mix">Быстрый Automix</string>
+    <string name="home_quick_mix_desc">Бесшовный микс с DJ-переходами</string>
+    <string name="home_section_recently_played">Недавно прослушанные</string>
+    <string name="home_section_favorites">Любимые треки</string>
+    <string name="home_section_albums">Популярные альбомы</string>
+    <string name="home_section_artists">Исполнители</string>
+    <string name="home_jump_back_in">Продолжить прослушивание</string>
+    <string name="home_start_listening">Начать прослушивание</string>
+    <string name="home_empty_library">Медиатека пуста. Предоставьте доступ или добавьте аудиофайлы.</string>
+    <string name="home_see_all">Все</string>
+    <string name="home_stats_summary">%1$d треков • %2$d альбомов • %3$d артистов</string>
+
+    <!-- Search & Empty States -->
+    <string name="search_placeholder">Поиск треков, артистов, альбомов…</string>
+    <string name="permission_required_message">Требуется разрешение на доступ к аудиофайлам</string>
+    <string name="permission_grant_button">Предоставить доступ</string>
+    <string name="no_audio_files_found">Аудиофайлы не найдены</string>
+    <string name="share_track_title">Поделиться треком</string>
+    <string name="content_desc_album_art">Обложка альбома</string>
+
+    <!-- Sorting -->
+    <string name="sort_title_asc">По названию (А-Я)</string>
+    <string name="sort_title_desc">По названию (Я-А)</string>
+    <string name="sort_date_added_desc">Сначала новые</string>
+    <string name="sort_date_added_asc">Сначала старые</string>
+    <string name="sort_artist_asc">По исполнителю</string>
+    <string name="sort_duration_desc">По длительности (убыв.)</string>
+    <string name="sort_duration_asc">По длительности (возр.)</string>
+
+    <!-- Track Options Context Menu -->
+    <string name="menu_play_next">Воспроизвести следующим</string>
+    <string name="menu_play_next_desc">Вставить в очередь после текущего трека</string>
+    <string name="menu_add_to_queue">Добавить в очередь</string>
+    <string name="menu_add_to_queue_desc">В конец текущей очереди воспроизведения</string>
+    <string name="menu_add_favorite">В избранное</string>
+    <string name="menu_remove_favorite">Удалить из избранного</string>
+    <string name="menu_add_to_playlist">Добавить в плейлист</string>
+    <string name="menu_audio_details">Свойства аудиофайла</string>
+    <string name="menu_audio_details_desc">Битрейт, кодек, частота, размер и путь</string>
+    <string name="menu_share">Поделиться</string>
+    <string name="menu_delete">Удалить с устройства</string>
+
+    <!-- Track Details Dialog -->
+    <string name="details_dialog_title">Свойства аудиофайла</string>
+    <string name="details_album">Альбом</string>
+    <string name="details_year">Год</string>
+    <string name="details_track_number">Номер трека</string>
+    <string name="details_audio_specs">Аудио характеристики</string>
+    <string name="details_bitrate">Битрейт</string>
+    <string name="details_sample_rate">Частота дискретизации</string>
+    <string name="details_channels">Каналы</string>
+    <string name="details_file_size">Размер файла</string>
+    <string name="details_mime_type">MIME-тип</string>
+    <string name="details_automix_title">Automix Анализ</string>
+    <string name="details_bpm">Темп (BPM)</string>
+    <string name="details_key">Тональность</string>
+    <string name="details_energy">Энергия трека</string>
+    <string name="details_key_determining">Определяется</string>
+    <string name="details_file_path">Путь к файлу</string>
+    <string name="details_path_copied_toast">Путь скопирован</string>
+
+    <!-- Technical Specs Strings -->
+    <string name="unknown">Неизвестно</string>
+    <string name="file_size_mb">%.2f МБ</string>
+    <string name="bitrate_kbps">%d kbps</string>
+    <string name="bitrate_vbr_unknown">VBR / Неизвестно</string>
+    <string name="sample_rate_khz">%.1f kHz</string>
+    <string name="channels_mono">Моно</string>
+    <string name="channels_stereo">Стерео</string>
+    <string name="channels_5_1">5.1 Surround</string>
+    <string name="channels_7_1">7.1 Surround</string>
+    <string name="channels_count">%d кан.</string>
+
+    <!-- Delete Confirmation Dialog -->
+    <string name="delete_track_dialog_title">Удалить аудиофайл?</string>
+    <string name="delete_track_dialog_message">Трек «%s» будет безвозвратно удален с вашего устройства.</string>
+    <string name="dialog_delete_track_title">Удалить трек?</string>
+    <string name="dialog_delete_track_message">Файл будет безвозвратно удален с вашего устройства.</string>
+
+    <!-- Playlists -->
+    <string name="playlists_smart_section">Смарт-подборки</string>
+    <string name="playlists_my_section">Мои плейлисты</string>
+    <string name="smart_playlist_favorites">Избранное</string>
+    <string name="smart_playlist_favorites_count">%d треков</string>
+    <string name="smart_playlist_recently_added">Недавно добавленные</string>
+    <string name="smart_playlist_recently_added_count">%d треков</string>
+    <string name="smart_playlist_most_played">Часто прослушиваемые</string>
+    <string name="smart_playlist_most_played_count">%d треков</string>
+    <string name="smart_playlist_favorites_subtitle">%d любимых треков</string>
+    <string name="smart_playlist_recently_added_subtitle">%d новых треков</string>
+    <string name="smart_playlist_most_played_subtitle">%d треков с наибольшим числом воспроизведений</string>
+    <string name="playlist_empty_custom">%d треков</string>
+    <string name="playlists_empty">Нет созданных плейлистов</string>
+    <string name="playlist_is_empty">Плейлист пуст</string>
+    <string name="playlist_delete">Удалить плейлист</string>
+    <string name="playlist_add_dialog_title">Добавить в плейлист</string>
+    <string name="playlist_new_button">Новый плейлист</string>
+    <string name="playlist_new_title">Новый плейлист</string>
+    <string name="playlist_name_label">Название плейлиста</string>
+    <string name="playlist_tracks_count">%d треков</string>
+
+    <!-- Albums and Artists -->
+    <string name="albums_empty">Альбомы не найдены</string>
+    <string name="artists_empty">Исполнители не найдены</string>
+    <string name="artist_summary_count">%1$d треков • %2$d альбомов</string>
+
+    <!-- Now Playing & Queue Sheet -->
+    <string name="now_playing_title">NOW PLAYING</string>
+    <string name="queue_sheet_title">Queue &amp; Automix Chain</string>
+    <string name="action_close_queue">Закрыть очередь</string>
+    <string name="queue_badge_now">NOW • </string>
+    <string name="queue_badge_mixing_in">MIXING IN • </string>
+    <string name="action_move_up">Переместить выше</string>
+    <string name="action_move_down">Переместить ниже</string>
+    <string name="action_remove_from_queue">Удалить из очереди</string>
+    <string name="queue_analyzing">Smart DJ EQ Transition (Анализ…)</string>
+
+    <!-- Settings Dialog & Library Analysis -->
+    <string name="settings_automix_title">Настройки автомикса</string>
+    <string name="settings_library_analysis_title">Анализ всей библиотеки</string>
+    <string name="settings_library_analysis_description">Распознаёт вокал, ритм, громкость и точки переходов. Результаты сохраняются на устройстве и используются повторно.</string>
+    <string name="settings_library_analysis_background_hint">Обработка работает с выключенным экраном и ждёт паузы в воспроизведении. Прогресс и остановка доступны в уведомлении.</string>
+    <string name="settings_force_analysis_checkbox">Пересчитать даже сохранённые треки</string>
+    <string name="settings_force_analysis_warning">Повторный анализ всей библиотеки может занять много времени и расходует заряд.</string>
+    <string name="analysis_waiting_for_playback">Ожидание паузы в воспроизведении</string>
+    <string name="analysis_in_progress">Анализ: %s</string>
+    <string name="analysis_cancelled">Анализ остановлен</string>
+    <string name="analysis_completed">Анализ завершён</string>
+    <string name="analysis_progress_count">%1$d из %2$d</string>
+    <string name="analysis_stop">Остановить</string>
+    <string name="analysis_recalculate_all">Пересчитать всю библиотеку</string>
+    <string name="analysis_start">Анализировать библиотеку</string>
+    <string name="analysis_need_library_access">Для запуска нужен доступ к непустой музыкальной библиотеке.</string>
+
+    <!-- Service Notifications & Errors -->
+    <string name="notification_channel_analysis">Анализ музыкальной библиотеки</string>
+    <string name="analysis_error_start_failed">Android не разрешил запуск фонового анализа. Попробуйте снова из настроек.</string>
+    <string name="analysis_error_service_failed">Android не разрешил фоновый анализ. Попробуйте запустить его снова из настроек.</string>
+    <string name="analysis_error_read_failed">Не удалось прочитать библиотеку. Проверьте доступ к аудиофайлам и запустите анализ снова.</string>
+    <string name="analysis_notification_title">Анализ библиотеки: %1$d из %2$d</string>
+    <string name="analysis_preparing">Подготовка</string>
+    <string name="analysis_timeout">Android остановил длительную обработку. Готовые результаты сохранены; анализ можно продолжить.</string>
+    <string name="queue_transition_quality">Прогноз перехода: %1$d%% • Достоверность: %2$d%%</string>
+</resources>

@@ -232,7 +232,8 @@ data class SavedTransition(
     val transitionTool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP,
     val transitionStyle: String = transitionTool.displayName,
     val tempoSyncPercent: Int = 0,   // e.g. +3 or -2 (%) BPM sync applied during transition
-    val isCompleted: Boolean = false
+    val isCompleted: Boolean = false,
+    val quality: TransitionQuality? = null
 ) {
     companion object {
         fun key(fromSongId: Long, toSongId: Long): String = "${fromSongId}_${toSongId}"
