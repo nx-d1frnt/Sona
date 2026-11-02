@@ -49,4 +49,24 @@ class LoudnessAnalyzerTest {
         assertEquals(1f, LoudnessNormalizer.gain(quiet.copy(lufs = Float.NaN)), 0f)
         assertEquals(1f, LoudnessNormalizer.gain(quiet.copy(lufs = -65f)), 0f)
     }
+
+    @Test fun wholeTrackGainWeightsAllWindowsInsteadOfOnlyBreakdownCore() {
+        val track = TrackAnalysis(
+            songId = 1L, bpm = 120f, energy = 0.7f,
+            cueInMs = 0L, mixOutMs = 180_000L, crossfadeDurationMs = 10_000L,
+            durationMs = 200_000L,
+            loudnessSections = listOf(
+                LoudnessSection(0L, 24_000L, -16f, 0.75f),
+                LoudnessSection(96_000L, 114_000L, -27f, 0.25f), // quiet mid breakdown
+                LoudnessSection(164_000L, 200_000L, -14f, 0.85f)
+            ),
+            loudnessAnalyzed = true
+        )
+        val wholeGain = LoudnessNormalizer.gain(track, positionMs = null)
+        val coreOnlyGain = LoudnessNormalizer.gain(track.loudnessSections[1])
+        // Whole-track gain must not boost as aggressively as the quiet breakdown alone,
+        // and must respect the 0.85 peak observed in the outro window.
+        assertTrue(wholeGain < coreOnlyGain)
+        assertTrue(wholeGain * 0.85f <= 0.891f)
+    }
 }

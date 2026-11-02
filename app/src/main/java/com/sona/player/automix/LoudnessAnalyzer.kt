@@ -69,12 +69,42 @@ internal object LoudnessAnalyzer {
 
 internal object LoudnessNormalizer {
     fun gain(track: TrackAnalysis?, positionMs: Long? = null): Float {
-        val core = track?.loudnessSections?.minByOrNull {
-            abs((it.startMs + it.endMs) / 2 - (track.durationMs * 0.60).toLong())
+        if (track == null || track.loudnessSections.isEmpty()) return 1f
+        if (positionMs != null) {
+            track.loudnessSections.firstOrNull { positionMs in it.startMs until it.endMs }
+                ?.let { return gain(it) }
         }
-        val section = if (positionMs == null) core else track?.loudnessSections
-            ?.firstOrNull { positionMs in it.startMs until it.endMs } ?: core
-        return gain(section)
+        // When normalizing the whole track (positionMs == null or outside local windows),
+        // combine all valid analyzed windows in the energy domain (weighting core/outro higher
+        // than a potentially quiet intro) and bound headroom against the highest observed peak.
+        val valid = track.loudnessSections.filter {
+            it.lufs.isFinite() && it.lufs >= -55f && it.samplePeak.isFinite() && it.samplePeak > 0f
+        }
+        if (valid.isEmpty()) return 1f
+        if (valid.size == 1) return gain(valid[0])
+
+        val coreCenter = (track.durationMs * 0.58).toLong()
+        var weightedEnergy = 0.0
+        var totalWeight = 0.0
+        var maxPeak = 0f
+        for (section in valid) {
+            val center = (section.startMs + section.endMs) / 2
+            val isCore = abs(center - coreCenter) <= track.durationMs * 0.20
+            val isIntro = section.startMs <= 1000L
+            val durationSec = ((section.endMs - section.startMs).coerceAtLeast(1000L)) / 1000.0
+            val sectionWeight = durationSec * when {
+                isCore -> 1.6
+                isIntro -> 0.65
+                else -> 1.15
+            }
+            val energy = 10.0.pow((section.lufs + 0.691) / 10.0)
+            weightedEnergy += energy * sectionWeight
+            totalWeight += sectionWeight
+            maxPeak = max(maxPeak, section.samplePeak)
+        }
+        if (totalWeight <= 0.0 || weightedEnergy <= 0.0) return 1f
+        val combinedLufs = (-0.691 + 10.0 * log10(weightedEnergy / totalWeight)).toFloat()
+        return gain(LoudnessSection(0L, track.durationMs, combinedLufs, maxPeak))
     }
 
     fun gain(section: LoudnessSection?): Float {

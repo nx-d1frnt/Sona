@@ -30,6 +30,16 @@ android {
         debug {
             isMinifyEnabled = false
         }
+        create("minifiedDebug") {
+            initWith(getByName("debug"))
+            matchingFallbacks += listOf("debug")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21

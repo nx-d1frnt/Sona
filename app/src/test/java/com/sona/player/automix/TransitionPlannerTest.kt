@@ -169,4 +169,56 @@ class TransitionPlannerTest {
             assertEquals(1f, TransitionEnvelopes.gains(tool, 1f).second, 0.001f)
         }
     }
+
+    @Test fun confidentBeatsWithEnergyJumpKeepClubHighPassRiserInsteadOfBeatCut() {
+        val outgoing = from().copy(energy = 0.55f)
+        val incoming = to(124f).copy(energy = 0.85f)
+        val plan = TransitionPlanner.plan(outgoing, incoming, AutomixMode.AUTO_DJ)
+        assertEquals(AutomixTransitionTool.HIGH_PASS_RISER_SLAM, plan.tool)
+        assertTrue(plan.durationMs >= 8500L)
+    }
+
+    @Test fun driftingOrUncertainTempoFallsBackToSilkyEqualPowerCrossfade() {
+        val liveJazzOut = from().copy(
+            energy = 0.72f,
+            beatSections = listOf(BeatSection(270_000, 300_000, 128f, 0.30f, listOf(271_000, 272_000)))
+        )
+        val bangerIn = to(128f).copy(energy = 0.88f)
+        val plan = TransitionPlanner.plan(liveJazzOut, bangerIn, AutomixMode.AUTO_DJ)
+        assertEquals(AutomixTransitionTool.SILKY_WARM_ISOLATOR, plan.tool)
+        assertEquals(1f, plan.outgoingTempoRatio, 0f)
+        assertEquals(1f, plan.incomingTempoRatio, 0f)
+    }
+
+    @Test fun smartShufflePenalizesSameArtistRepetition() {
+        fun song(id: Long, artist: String): com.sona.player.data.model.Song {
+            val cls = Class.forName("sun.misc.Unsafe")
+            val unsafe = cls.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
+            val inst = cls.getMethod("allocateInstance", Class::class.java)
+                .invoke(unsafe, com.sona.player.data.model.Song::class.java) as com.sona.player.data.model.Song
+            for ((name, value) in listOf("id" to id, "title" to "Track $id", "artist" to artist, "album" to "Album", "durationMs" to 200_000L)) {
+                com.sona.player.data.model.Song::class.java.getDeclaredField(name).apply {
+                    isAccessible = true
+                    set(inst, value)
+                }
+            }
+            return inst
+        }
+        val currentSong = song(1L, "Artist A")
+        val sameArtistSong = song(2L, "Artist A")
+        val diffArtistSong = song(3L, "Artist B")
+        val a1 = from().copy(songId = 1L, bpm = 120f, energy = 0.70f)
+        val a2 = to(120f).copy(songId = 2L, bpm = 120f, energy = 0.70f)
+        val a3 = to(121f).copy(songId = 3L, bpm = 121f, energy = 0.71f)
+        val map = mapOf(1L to a1, 2L to a2, 3L to a3)
+        val match = AutomixQueueSelector.findBestNextTrack(
+            currentSong = currentSong,
+            currentAnalysis = a1,
+            queue = listOf(currentSong, sameArtistSong, diffArtistSong),
+            currentIndex = 0,
+            analysisProvider = { map[it] }
+        )
+        assertNotNull(match)
+        assertEquals(3L, match!!.song.id)
+    }
 }

@@ -31,10 +31,19 @@ object AutomixQueueSelector {
     ): MatchResult? {
         if (currentIndex < 0 || currentIndex + 1 >= queue.size) return null
 
-        var bestIndex = currentIndex + 1
-        var bestScore = -1f
-        var bestAnalysis: TrackAnalysis? = null
+        val recentArtists = queue.subList((currentIndex - 2).coerceAtLeast(0), currentIndex + 1)
+            .mapNotNull { normalizeArtist(it.artist) }
+        val currentArtist = normalizeArtist(currentSong.artist)
 
+        data class ScoredCandidate(
+            val index: Int,
+            val song: Song,
+            val analysis: TrackAnalysis,
+            val rawScore: Float,
+            val selectionScore: Float
+        )
+
+        val candidates = ArrayList<ScoredCandidate>()
         // Inspect upcoming unplayed songs in the queue (up to 25 candidates ahead)
         val searchLimit = min(queue.size - 1, currentIndex + 25)
         for (idx in (currentIndex + 1)..searchLimit) {
@@ -42,22 +51,39 @@ object AutomixQueueSelector {
             if (candidate.id == currentSong.id) continue
 
             val candidateAnalysis = analysisProvider(candidate.id) ?: continue
-            val score = computeCompatibilityScore(currentAnalysis, candidateAnalysis)
-
-            if (score > bestScore) {
-                bestScore = score
-                bestIndex = idx
-                bestAnalysis = candidateAnalysis
+            val rawScore = computeCompatibilityScore(currentAnalysis, candidateAnalysis)
+            val candidateArtist = normalizeArtist(candidate.artist)
+            val artistPenalty = when {
+                candidateArtist != null && candidateArtist == currentArtist -> 0.14f
+                candidateArtist != null && candidateArtist in recentArtists -> 0.07f
+                else -> 0f
             }
+            val selectionScore = (rawScore - artistPenalty).coerceAtLeast(0.05f)
+            candidates += ScoredCandidate(idx, candidate, candidateAnalysis, rawScore, selectionScore)
         }
 
-        val chosenSong = queue[bestIndex]
-        val chosenAnalysis = bestAnalysis ?: analysisProvider(chosenSong.id) ?: return null
-        val finalScore = if (bestScore > 0f) bestScore else computeCompatibilityScore(currentAnalysis, chosenAnalysis)
+        val chosen = if (candidates.isNotEmpty()) {
+            val maxSel = candidates.maxOf { it.selectionScore }
+            // Keep top candidates within 4.5% of the best score (up to 4 tracks) and pick
+            // deterministically using the current song & queue context to prevent greedy loops
+            // over the same "universal" tracks while keeping queue previews stable.
+            val topPool = candidates
+                .filter { it.selectionScore >= maxSel - 0.045f }
+                .sortedByDescending { it.selectionScore }
+                .take(4)
+            val seed = (currentSong.id * 31L + currentIndex * 17L).toInt()
+            val pickIdx = kotlin.math.abs(seed) % topPool.size
+            topPool[pickIdx]
+        } else null
+
+        val bestIndex = chosen?.index ?: (currentIndex + 1)
+        val chosenSong = chosen?.song ?: queue[bestIndex]
+        val chosenAnalysis = chosen?.analysis ?: analysisProvider(chosenSong.id) ?: return null
+        val finalScore = chosen?.rawScore ?: computeCompatibilityScore(currentAnalysis, chosenAnalysis)
 
         val (outRatio, inRatio) = computeTempoSyncRatios(
-            bpmOut = currentAnalysis.bpm,
-            bpmIn = chosenAnalysis.bpm
+            bpmOut = localBpm(currentAnalysis, currentAnalysis.mixOutMs),
+            bpmIn = localBpm(chosenAnalysis, chosenAnalysis.cueInMs)
         )
         val tool = TransitionPlanner.plan(currentAnalysis, chosenAnalysis, AutomixMode.AUTO_DJ).tool
 
@@ -72,9 +98,37 @@ object AutomixQueueSelector {
         )
     }
 
+    private fun normalizeArtist(artist: String?): String? {
+        val cleaned = artist?.trim()?.lowercase() ?: return null
+        if (cleaned.isEmpty() || cleaned == "<unknown>" || cleaned == "unknown artist" || cleaned == "various artists") {
+            return null
+        }
+        return cleaned
+    }
+
+    /**
+     * Tempo measured where the mix actually happens (outgoing exit / incoming entry), falling back
+     * to the nearest confident beat section and finally the whole-track estimate.
+     */
+    internal fun localBpm(track: TrackAnalysis, positionMs: Long): Float {
+        val valid = track.beatSections.filter { it.bpm.isFinite() && it.bpm > 0f }
+        valid.filter { it.confidence >= 0.45f && positionMs in it.startMs..it.endMs }
+            .maxByOrNull { it.confidence }?.let { return it.bpm }
+        valid.filter { it.confidence >= 0.65f }
+            .map { it to minOf(abs(positionMs - it.startMs), abs(positionMs - it.endMs)) }
+            .filter { it.second <= 15_000L }
+            .minByOrNull { it.second }?.let { return it.first.bpm }
+        return track.bpm
+    }
+
+    private const val TEMPO_WEIGHT = 0.58f
+    private const val ENERGY_WEIGHT = 0.24f
+    private const val KEY_WEIGHT = 0.18f
+
     fun computeCompatibilityScore(current: TrackAnalysis, candidate: TrackAnalysis): Float {
-        val bpmA = current.bpm
-        val bpmB = candidate.bpm
+        val bpmA = localBpm(current, current.mixOutMs)
+        val bpmB = localBpm(candidate, candidate.cueInMs)
+        if (!bpmA.isFinite() || bpmA <= 0f || !bpmB.isFinite() || bpmB <= 0f) return 0.3f
 
         // Compare direct BPM, double-time (2x), and half-time (0.5x)
         val diffDirect = abs(bpmA - bpmB) / bpmA
@@ -93,21 +147,42 @@ object AutomixQueueSelector {
         val energyDiff = abs(current.energy - candidate.energy)
         val energyScore = (1.0f - energyDiff * 1.15f).coerceIn(0.20f, 1.0f)
 
-        return (tempoScore * 0.68f + energyScore * 0.32f).coerceIn(0f, 1f)
+        // Harmonic (Camelot) compatibility, weighted by how sure we are of both keys.
+        // Unknown keys drop out of the score instead of counting as a clash.
+        val keyA = current.musicalKey
+        val keyB = candidate.musicalKey
+        val keyWeight = if (keyA != null && keyB != null) KEY_WEIGHT * minOf(keyA.confidence, keyB.confidence) else 0f
+        val keyScore = if (keyA != null && keyB != null) MusicalKey.compatibility(keyA, keyB) else 0f
+
+        return ((tempoScore * TEMPO_WEIGHT + energyScore * ENERGY_WEIGHT + keyScore * keyWeight) /
+            (TEMPO_WEIGHT + ENERGY_WEIGHT + keyWeight)).coerceIn(0f, 1f)
     }
 
     /**
      * Automatically selects the best DJ Transition Toolset based on the acoustic relationship
-     * between the outgoing and incoming tracks (BPM delta, 0.5x/2x harmonic ratio, energy lift/drop).
+     * between the outgoing and incoming tracks (BPM delta, 0.5x/2x harmonic ratio, energy lift/drop,
+     * and rhythm confidence for live/drifting-tempo tracks).
      */
     fun selectOptimalTransitionTool(
         fromAnalysis: TrackAnalysis,
         toAnalysis: TrackAnalysis
     ): AutomixTransitionTool {
-        val bpmA = fromAnalysis.bpm
-        val bpmB = toAnalysis.bpm
-        val directDiff = abs(bpmA - bpmB) / bpmA
-        val halfDoubleDiff = min(abs(bpmA - bpmB * 2f), abs(bpmA - bpmB * 0.5f)) / bpmA
+        // Only fall back to a soft equal-power isolator morph when a track has explicitly
+        // measured beat sections that all show very unstable/drifting tempo (< 0.35f confidence,
+        // e.g. rubato, live jazz, beatless ambient). Normal or unmeasured beatSections proceed
+        // to full DJ transitions.
+        val outMaxBeatConf = fromAnalysis.beatSections.maxOfOrNull { it.confidence }
+        val inMaxBeatConf = toAnalysis.beatSections.maxOfOrNull { it.confidence }
+        if ((outMaxBeatConf != null && outMaxBeatConf < 0.35f) ||
+            (inMaxBeatConf != null && inMaxBeatConf < 0.35f)
+        ) {
+            return AutomixTransitionTool.SILKY_WARM_ISOLATOR
+        }
+
+        val bpmA = localBpm(fromAnalysis, fromAnalysis.mixOutMs)
+        val bpmB = localBpm(toAnalysis, toAnalysis.cueInMs)
+        val directDiff = abs(bpmA - bpmB) / bpmA.coerceAtLeast(1f)
+        val halfDoubleDiff = min(abs(bpmA - bpmB * 2f), abs(bpmA - bpmB * 0.5f)) / bpmA.coerceAtLeast(1f)
         val energyDelta = toAnalysis.energy - fromAnalysis.energy
 
         return when {

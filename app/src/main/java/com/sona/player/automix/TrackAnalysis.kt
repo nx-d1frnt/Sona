@@ -102,8 +102,16 @@ data class TrackAnalysis(
     val vocalSections: List<VocalSection> = emptyList(),
     val loudnessSections: List<LoudnessSection> = emptyList(),
     val featureAnalysisAttempted: Boolean = true,
-    val loudnessAnalyzed: Boolean = false
+    val loudnessAnalyzed: Boolean = false,
+    val keyIndex: Int = -1,           // 0..11 major tonic (C..B), 12..23 minor tonic; -1 unknown
+    val keyConfidence: Float = 0f,
+    val keyAnalyzed: Boolean = false   // Key pass attempted (a null key may still be a valid result)
 ) {
+    val musicalKey: MusicalKey? get() = MusicalKey.fromIndex(keyIndex, keyConfidence)
+
+    /** All analysis passes for the current schema have been attempted. */
+    val isComplete: Boolean get() = loudnessAnalyzed && featureAnalysisAttempted && keyAnalyzed
+
     /**
      * Resolves [AutomixMode.AUTO_DJ] into either [AutomixMode.QUICK_MID_MIX] or [AutomixMode.CLASSIC_OUTRO]
      * based on the outgoing track's duration, energy, mid-track breakdown structure, and harmonic compatibility

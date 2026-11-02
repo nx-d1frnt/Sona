@@ -10,6 +10,8 @@ import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Offline AudioSet singing/speech/rap detection. Scores are hints, not source separation. */
 internal class YamnetVocalDetector(context: Context) : Closeable {
@@ -18,6 +20,7 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
     private val output: ByteBuffer
     private val sampleCount: Int
     private val scoreCount: Int
+    private val mutex = Mutex()
 
     init {
         val model = context.assets.openFd("models/yamnet.tflite").use { asset ->
@@ -25,7 +28,10 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
                 stream.channel.map(FileChannel.MapMode.READ_ONLY, asset.startOffset, asset.declaredLength)
             }
         }
-        interpreter = Interpreter(model, Interpreter.Options().setNumThreads(1))
+        val options = Interpreter.Options().apply {
+            setNumThreads(2)
+        }
+        interpreter = Interpreter(model, options)
         val inputTensor = interpreter.getInputTensor(0)
         val outputTensor = interpreter.getOutputTensor(0)
         require(inputTensor.dataType() == DataType.FLOAT32 && outputTensor.dataType() == DataType.FLOAT32)
@@ -38,19 +44,31 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
 
     suspend fun analyze(window: AudioWindow): List<VocalSection> {
         require(window.sampleRate == 16_000)
+        if (window.samples.size < sampleCount) return emptyList()
         val result = mutableListOf<VocalSection>()
-        // Non-overlapping 0.975s windows keep lookahead inexpensive; unknown tails remain unknown.
-        for (offset in 0..(window.samples.size - sampleCount) step sampleCount) {
-            currentCoroutineContext().ensureActive()
-            input.clear()
-            for (i in offset until offset + sampleCount) input.putFloat(window.samples[i])
-            input.rewind()
-            output.clear()
-            interpreter.run(input, output)
-            output.rewind()
-            val scores = FloatArray(scoreCount) { output.float }
-            result += VocalSection(window.startMs + offset * 1000L / 16_000,
-                window.startMs + (offset + sampleCount) * 1000L / 16_000, vocalScore(scores))
+        // 50% overlap (0.4875s hop) gives fine ~488ms resolution for VOCAL_HANDOFF pauses
+        // with zero blind spots between 0.975s YAMNet windows.
+        val stride = sampleCount / 2
+        mutex.withLock {
+            var offset = 0
+            while (offset + sampleCount <= window.samples.size) {
+                currentCoroutineContext().ensureActive()
+                input.clear()
+                for (i in offset until offset + sampleCount) input.putFloat(window.samples[i])
+                input.rewind()
+                output.clear()
+                interpreter.run(input, output)
+                output.rewind()
+                val scores = FloatArray(scoreCount) { output.float }
+                val isLast = offset + stride + sampleCount > window.samples.size
+                val sectionEndSample = if (isLast) window.samples.size else offset + stride
+                result += VocalSection(
+                    window.startMs + offset * 1000L / 16_000,
+                    window.startMs + sectionEndSample * 1000L / 16_000,
+                    vocalScore(scores)
+                )
+                offset += stride
+            }
         }
         return result
     }

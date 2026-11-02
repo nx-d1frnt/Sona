@@ -105,7 +105,7 @@ internal object BeatTracker {
                 real[i] = samples[frame * HOP + i] * hann[i]
                 imaginary[i] = 0.0
             }
-            fft(real, imaginary)
+            Fft.transform(real, imaginary)
             var flux = 0.0
             for (bin in 2 until 160) { // ~62..5000 Hz; bass weighted for kick attacks.
                 val magnitude = ln(1 + hypot(real[bin], imaginary[bin]))
@@ -115,40 +115,5 @@ internal object BeatTracker {
             if (frame > 0) result[frame] = (flux / 158).toFloat()
         }
         return result
-    }
-
-    private fun fft(real: DoubleArray, imaginary: DoubleArray) {
-        val n = real.size
-        var j = 0
-        for (i in 1 until n) {
-            var bit = n shr 1
-            while (j and bit != 0) { j = j xor bit; bit = bit shr 1 }
-            j = j xor bit
-            if (i < j) {
-                val temp = real[i]; real[i] = real[j]; real[j] = temp
-            }
-        }
-        var length = 2
-        while (length <= n) {
-            val angle = -2 * PI / length
-            val wrStep = cos(angle)
-            val wiStep = sin(angle)
-            for (start in 0 until n step length) {
-                var wr = 1.0
-                var wi = 0.0
-                for (offset in 0 until length / 2) {
-                    val a = start + offset
-                    val b = a + length / 2
-                    val tr = real[b] * wr - imaginary[b] * wi
-                    val ti = real[b] * wi + imaginary[b] * wr
-                    real[b] = real[a] - tr; imaginary[b] = imaginary[a] - ti
-                    real[a] += tr; imaginary[a] += ti
-                    val nextWr = wr * wrStep - wi * wiStep
-                    wi = wr * wiStep + wi * wrStep
-                    wr = nextWr
-                }
-            }
-            length *= 2
-        }
     }
 }

@@ -51,7 +51,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.sona.player.automix.AutomixQueueSelector
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.automix.SavedTransition
 import com.sona.player.automix.TrackAnalysis
@@ -239,18 +238,9 @@ fun AutomixQueueSheet(
                         // Render DJ Transition Connector between track[index] and track[index + 1]
                         if (automixState.isEnabled && index < queue.lastIndex) {
                             val nextSongInQueue = queue[index + 1]
-                            val nextAnalysis = automixState.analyzedTracks[nextSongInQueue.id]
                             val key = SavedTransition.key(track.id, nextSongInQueue.id)
-                            val savedTransition = automixState.savedTransitions[key] ?: if (analysis != null && nextAnalysis != null) {
-                                AutomixQueueSelector.buildSavedTransition(
-                                    fromSongId = track.id,
-                                    toSongId = nextSongInQueue.id,
-                                    fromAnalysis = analysis,
-                                    toAnalysis = nextAnalysis,
-                                    mode = automixState.mode,
-                                    isCompleted = index < currentIndex
-                                )
-                            } else null
+                            // Planned in the background by the engine; never plan on the UI thread here.
+                            val savedTransition = automixState.savedTransitions[key]
 
                             val isLiveTransitionHere = automixState.isTransitioning && (
                                 (automixState.transitionFromSongId == track.id && automixState.transitionTargetSong?.id == nextSongInQueue.id) ||

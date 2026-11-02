@@ -89,8 +89,14 @@ internal object TransitionPlanner {
         if (tool != AutomixTransitionTool.VOCAL_HANDOFF) {
             val outVoice = MusicalCueSelector.vocalRisk(from, baseOut, baseOut + 2000L)
             val inVoice = MusicalCueSelector.vocalRisk(to, baseIn, baseIn + 2000L)
-            if (outBeat != null && inBeat != null &&
-                (gap!! > 0.06f || abs(from.energy - to.energy) >= 0.18f) && outVoice != null && outVoice < 0.35f &&
+            // Only fall back to a short 1-2s BEAT_CUT when BPMs are genuinely incompatible (> 10% gap)
+            // OR when local beat confidence is too weak (< 0.65f) to tempo-sync across a sharp energy drop.
+            // Never overwrite HIGH_PASS_RISER_SLAM, BASS_SWAP_DROP, or HALF_DOUBLE_TIME_BRIDGE when
+            // both decks have confident beat grids (>= 0.65f) and can lock tempos cleanly!
+            val canTempoSync = outBeat != null && inBeat != null &&
+                outBeat.confidence >= 0.65f && inBeat.confidence >= 0.65f && (gap ?: 1f) <= 0.10f
+            if (outBeat != null && inBeat != null && !canTempoSync &&
+                (gap!! > 0.10f || abs(from.energy - to.energy) >= 0.18f) && outVoice != null && outVoice < 0.35f &&
                 inVoice != null && inVoice < 0.35f) {
                 tool = AutomixTransitionTool.BEAT_CUT
                 duration = ((period ?: 500f) * 2).toLong().coerceIn(1000L, 2000L)
@@ -99,7 +105,7 @@ internal object TransitionPlanner {
                     mode != AutomixMode.AUTO_DJ || resolved != AutomixMode.QUICK_MID_MIX ||
                         MusicalCueSelector.isVocalPause(from, it)
                 } ?: baseOut else baseOut
-            } else if ((period != null && gap != null && gap > 0.06f) ||
+            } else if ((period != null && gap != null && gap > 0.10f) ||
                     (outVoice != null && outVoice > 0.35f && inVoice != null && inVoice > 0.35f)) {
                 tool = AutomixTransitionTool.ECHO_OUT
                 duration = ((period ?: 500f) * 6).toLong().coerceIn(2500L, 4500L)

@@ -13,8 +13,11 @@ import com.sona.player.MainActivity
 import com.sona.player.data.repository.AudioRepository
 import com.sona.player.playback.AutomixPlaybackEngine
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import java.util.concurrent.atomic.AtomicInteger
 
 data class LibraryAnalysisState(
     val running: Boolean = false, val total: Int = 0, val completed: Int = 0,
@@ -81,56 +84,90 @@ class LibraryAnalysisService : Service() {
         if (work?.isActive == true) return START_STICKY
         val resume = intent == null
         val force = if (resume) prefs.getBoolean("force", false) else intent?.getBooleanExtra("force", false) ?: false
-        val done = if (resume) prefs.getStringSet("done", emptySet()).orEmpty().toMutableSet() else mutableSetOf()
-        prefs.edit().putBoolean("running", true).putBoolean("force", force).putStringSet("done", done.toSet()).apply()
+        prefs.edit().putBoolean("running", true).putBoolean("force", force).apply()
         mutableState.value = LibraryAnalysisState(running = true)
         work = scope.launch {
             try {
                 val engine = AutomixPlaybackEngine.getInstance(applicationContext)
                 val songs = AudioRepository(applicationContext).getSongs()
-                mutableState.value = mutableState.value.copy(total = songs.size,
-                    completed = songs.count { it.id.toString() in done })
+                val totalCount = songs.size
+                val initialCached = if (force) 0 else songs.count { !engine.needsLibraryAnalysis(it.id) }
+                val completedCount = AtomicInteger(initialCached)
+                val cachedCount = AtomicInteger(initialCached)
+                val failedCount = AtomicInteger(0)
+
+                mutableState.value = mutableState.value.copy(
+                    total = totalCount,
+                    completed = initialCached,
+                    cached = initialCached
+                )
                 publish(true)
-                for (song in songs) {
-                    ensureActive()
-                    if (song.id.toString() in done) continue
-                    mutableState.value = mutableState.value.copy(title = song.title)
-                    if (!force && !engine.needsLibraryAnalysis(song.id)) {
-                        mutableState.value = mutableState.value.let { it.copy(cached = it.cached + 1) }
-                    } else {
-                        while (engine.playerState.value.isPlaying || engine.playerState.value.automix.isTransitioning) {
-                            releaseWakeLock()
-                            mutableState.value = mutableState.value.copy(waitingForPlayback = true)
+
+                val pendingSongs = if (force) songs else songs.filter { engine.needsLibraryAnalysis(it.id) }
+                if (pendingSongs.isEmpty()) {
+                    engine.notifyLibraryAnalysisProgress(forceImmediate = true)
+                    finish()
+                    return@launch
+                }
+
+                val workerCount = minOf(4, maxOf(2, Runtime.getRuntime().availableProcessors() - 1))
+                val channel = Channel<com.sona.player.data.model.Song>(Channel.BUFFERED)
+
+                val producer = launch(Dispatchers.Default) {
+                    for (song in pendingSongs) {
+                        channel.send(song)
+                    }
+                    channel.close()
+                }
+
+                val workers = (0 until workerCount).map {
+                    launch(Dispatchers.Default) {
+                        for (song in channel) {
+                            ensureActive()
+                            while (engine.playerState.value.isPlaying || engine.playerState.value.automix.isTransitioning) {
+                                releaseWakeLock()
+                                mutableState.update { it.copy(waitingForPlayback = true) }
+                                publish()
+                                delay(1000)
+                            }
+                            mutableState.update { it.copy(waitingForPlayback = false, title = song.title) }
+
+                            acquireWakeLock()
                             publish()
-                            delay(1000)
-                        }
-                        mutableState.value = mutableState.value.copy(waitingForPlayback = false)
-                        // Limit CPU wakefulness to one bounded analysis operation at a time.
-                        wakeLock?.acquire(90_000L)
-                        publish()
-                        try {
-                            engine.analyzeLibrarySong(song, force)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            mutableState.value = mutableState.value.let { it.copy(failed = it.failed + 1) }
-                        } finally {
-                            releaseWakeLock()
+                            try {
+                                engine.analyzeLibrarySong(song, force)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                failedCount.incrementAndGet()
+                            }
+
+                            val currentCompleted = completedCount.incrementAndGet()
+                            mutableState.update {
+                                it.copy(
+                                    completed = currentCompleted,
+                                    cached = cachedCount.get(),
+                                    failed = failedCount.get()
+                                )
+                            }
+                            publish()
                         }
                     }
-                    done.add(song.id.toString())
-                    prefs.edit().putStringSet("done", done.toSet()).apply()
-                    mutableState.value = mutableState.value.let { it.copy(completed = it.completed + 1) }
-                    publish()
-                    yield()
                 }
+
+                producer.join()
+                workers.joinAll()
+                engine.notifyLibraryAnalysisProgress(forceImmediate = true)
+                engine.flushPendingAnalysisWrites()
                 finish()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
                 finish(message = "Не удалось прочитать библиотеку. Проверьте доступ к аудиофайлам и запустите анализ снова.")
             } finally {
-                withContext(NonCancellable) { AutomixPlaybackEngine.getInstance(applicationContext).releaseAnalysisResources() }
+                withContext(NonCancellable) {
+                    AutomixPlaybackEngine.getInstance(applicationContext).releaseAnalysisResources()
+                }
             }
         }
         return START_STICKY
@@ -153,12 +190,13 @@ class LibraryAnalysisService : Service() {
 
     private fun publish(force: Boolean = false) {
         val now = android.os.SystemClock.elapsedRealtime()
-        if (force || now - lastNotificationAt >= 1000L) {
+        if (force || now - lastNotificationAt >= 500L) {
             lastNotificationAt = now
             getSystemService(NotificationManager::class.java).notify(NOTIFICATION, notification())
         }
     }
 
+    private fun acquireWakeLock() { if (wakeLock?.isHeld != true) wakeLock?.acquire(90_000L) }
     private fun releaseWakeLock() { if (wakeLock?.isHeld == true) wakeLock?.release() }
     private fun finish(cancelled: Boolean = false, message: String = "") {
         prefs.edit().putBoolean("running", false).remove("done").apply()

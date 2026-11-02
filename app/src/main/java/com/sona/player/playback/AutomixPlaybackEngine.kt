@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -69,18 +70,42 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val analysisEngine = AudioAnalysisEngine(context)
     suspend fun releaseAnalysisResources() = analysisEngine.releaseVocalDetector()
+    suspend fun flushPendingAnalysisWrites() = analysisEngine.flushPendingWrites()
 
     fun needsLibraryAnalysis(songId: Long) = analysisEngine.needsAnalysis(songId)
 
+    private val stateThrottleJob = java.util.concurrent.atomic.AtomicReference<Job?>(null)
+    private val lastStatePushMs = java.util.concurrent.atomic.AtomicLong(0L)
+
+    fun notifyLibraryAnalysisProgress(forceImmediate: Boolean = false) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (forceImmediate || now - lastStatePushMs.get() >= 500L) {
+            lastStatePushMs.set(now)
+            stateThrottleJob.getAndSet(null)?.cancel()
+            val state = _playerState.value
+            _playerState.value = state.copy(automix = state.automix.copy(
+                currentAnalysis = state.currentSong?.let { analysisEngine.getCached(it.id) },
+                nextMatchedAnalysis = playlist.getOrNull(state.currentIndex + 1)?.let { analysisEngine.getCached(it.id) },
+                analyzedTracks = analysisEngine.getAllCached()
+            ))
+        } else if (stateThrottleJob.get()?.isActive != true) {
+            val job = scope.launch {
+                delay(500L)
+                lastStatePushMs.set(android.os.SystemClock.elapsedRealtime())
+                val state = _playerState.value
+                _playerState.value = state.copy(automix = state.automix.copy(
+                    currentAnalysis = state.currentSong?.let { analysisEngine.getCached(it.id) },
+                    nextMatchedAnalysis = playlist.getOrNull(state.currentIndex + 1)?.let { analysisEngine.getCached(it.id) },
+                    analyzedTracks = analysisEngine.getAllCached()
+                ))
+            }
+            stateThrottleJob.set(job)
+        }
+    }
+
     suspend fun analyzeLibrarySong(song: Song, force: Boolean) {
         analysisEngine.analyzeSong(song, force)
-        analysisEngine.flushPendingWrites()
-        val state = _playerState.value
-        _playerState.value = state.copy(automix = state.automix.copy(
-            currentAnalysis = state.currentSong?.let { analysisEngine.getCached(it.id) },
-            nextMatchedAnalysis = playlist.getOrNull(state.currentIndex + 1)?.let { analysisEngine.getCached(it.id) },
-            analyzedTracks = analysisEngine.getAllCached()
-        ))
+        notifyLibraryAnalysisProgress(forceImmediate = false)
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -368,7 +393,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
         playlist.clear()
         playlist.addAll(songs)
-        savedTransitions.clear()
+        clearSavedTransitions()
         userLockedNextForSongId.clear()
 
         val safeIndex = startIndex.coerceIn(0, songs.lastIndex)
@@ -823,8 +848,21 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
         }
     }
 
+    /** Inputs a saved transition was planned from; analyses are immutable, so identity means "unchanged". */
+    private data class TransitionSource(val mode: AutomixMode, val from: TrackAnalysis, val to: TrackAnalysis)
+    private class PendingTransition(val index: Int, val key: String, val fromId: Long, val toId: Long,
+                                    val source: TransitionSource, val completed: Boolean)
+    private val transitionSources = mutableMapOf<String, TransitionSource>()
+    private var transitionRebuildJob: Job? = null
+
+    /**
+     * Refreshes queue transition previews. Only pairs whose analyses or mode changed are re-planned,
+     * and planning (vocal/beat cue searches) runs on [Dispatchers.Default] so the main thread never
+     * blocks on a long queue. Results are merged back on the main thread nearest-first, in chunks.
+     */
     private fun rebuildSavedTransitions(currentIndex: Int) {
         val activeMode = _playerState.value.automix.mode
+        val pending = ArrayList<PendingTransition>()
         for (i in 0 until (playlist.size - 1)) {
             val songA = playlist[i]
             val songB = playlist[i + 1]
@@ -833,15 +871,64 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             val key = SavedTransition.key(songA.id, songB.id)
             val existing = savedTransitions[key]
             val completed = (i < currentIndex) || (existing?.isCompleted == true)
-            savedTransitions[key] = AutomixQueueSelector.buildSavedTransition(
-                fromSongId = songA.id,
-                toSongId = songB.id,
-                fromAnalysis = analysisA,
-                toAnalysis = analysisB,
-                mode = activeMode,
-                isCompleted = completed
-            )
+            val source = TransitionSource(activeMode, analysisA, analysisB)
+            if (existing != null && transitionSources[key]?.matches(source) == true) {
+                if (existing.isCompleted != completed) savedTransitions[key] = existing.copy(isCompleted = completed)
+            } else {
+                pending += PendingTransition(i, key, songA.id, songB.id, source, completed)
+            }
         }
+        if (pending.isEmpty()) return
+        // Upcoming pairs first (the next transition matters most), then history.
+        pending.sortBy { if (it.index >= currentIndex) it.index - currentIndex else playlist.size + (currentIndex - it.index) }
+
+        transitionRebuildJob?.cancel()
+        transitionRebuildJob = scope.launch {
+            for (chunk in pending.chunked(6)) {
+                val built = withContext(Dispatchers.Default) {
+                    chunk.map { p ->
+                        p to AutomixQueueSelector.buildSavedTransition(
+                            fromSongId = p.fromId,
+                            toSongId = p.toId,
+                            fromAnalysis = p.source.from,
+                            toAnalysis = p.source.to,
+                            mode = p.source.mode,
+                            isCompleted = p.completed
+                        )
+                    }
+                }
+                for ((p, transition) in built) {
+                    // A live crossfade (or a newer rebuild) may already have filled this pair.
+                    if (transitionSources[p.key]?.matches(p.source) == true) continue
+                    val completed = p.completed || savedTransitions[p.key]?.isCompleted == true
+                    savedTransitions[p.key] = transition.copy(isCompleted = completed)
+                    transitionSources[p.key] = p.source
+                }
+                publishSavedTransitions()
+            }
+        }
+    }
+
+    private fun TransitionSource.matches(other: TransitionSource) =
+        mode == other.mode && from === other.from && to === other.to
+
+    private fun publishSavedTransitions() {
+        val state = _playerState.value
+        val current = playlist.getOrNull(state.currentIndex)
+        val next = playlist.getOrNull(state.currentIndex + 1)
+        val nextScore = if (current != null && next != null && !state.automix.isTransitioning)
+            savedTransitions[SavedTransition.key(current.id, next.id)]?.matchScorePercent else null
+        _playerState.value = state.copy(automix = state.automix.copy(
+            matchScorePercent = nextScore ?: state.automix.matchScorePercent,
+            savedTransitions = savedTransitions.toMap()
+        ))
+    }
+
+    private fun clearSavedTransitions() {
+        transitionRebuildJob?.cancel()
+        transitionRebuildJob = null
+        savedTransitions.clear()
+        transitionSources.clear()
     }
 
     private fun applyOneStepAheadMatch(currentIndex: Int, currentAnalysis: TrackAnalysis) {
@@ -1075,6 +1162,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 cueInMs = plan.cueInMs,
                 tempoSyncPercent = ((plan.incomingTempoRatio - 1f) * 100f).roundToInt()
             )
+            // Mark as up to date so a background rebuild doesn't replace the live plan's details.
+            transitionSources[key] = TransitionSource(activeMode, curAnalysis, nextAnalysis)
             userLockedNextForSongId.add(outgoingSong.id)
         }
 
@@ -1146,12 +1235,16 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             }
             incomingDeck.play()
 
+            // Progress follows the wall clock, so main-thread jitter and delay() overshoot don't
+            // stretch the fade. Time spent waiting on a buffering incoming deck is excluded.
             val stepMs = 50L
-            val totalSteps = (crossfadeDurationMs / stepMs).toInt().coerceAtLeast(20)
             var hasSwappedActiveDeck = false
+            var elapsedMs = 0L
+            var lastTickMs = android.os.SystemClock.elapsedRealtime()
 
-            for (step in 1..totalSteps) {
+            while (true) {
                 if (!isActive) return@launch
+                elapsedMs += android.os.SystemClock.elapsedRealtime() - lastTickMs
                 // Buffering must not advance the fade or silently promote an unready deck.
                 val playing = withTimeoutOrNull(8_000L) {
                     while (!incomingDeck.isPlaying) {
@@ -1162,12 +1255,13 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     }
                     true
                 } == true
+                lastTickMs = android.os.SystemClock.elapsedRealtime()
                 if (!playing) {
                     lastManualSeekTimeMs = System.currentTimeMillis()
                     recoverFailedCrossfade()
                     return@launch
                 }
-                val t = (step.toFloat() / totalSteps.toFloat()).coerceIn(0f, 1f)
+                val t = (elapsedMs.toFloat() / crossfadeDurationMs.coerceAtLeast(1L)).coerceIn(0f, 1f)
 
 
                 val activeUiTempo = if (t < 0.50f) outTempoRatio else inTempoRatio
@@ -1223,6 +1317,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     )
                 }
 
+                if (t >= 1f) break
                 delay(stepMs)
             }
 
