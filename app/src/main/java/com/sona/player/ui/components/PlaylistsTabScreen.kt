@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -21,12 +23,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.ElectricBolt
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Nightlife
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material.icons.rounded.Update
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -45,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -52,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.sona.player.R
+import com.sona.player.automix.AutomixVibe
 import com.sona.player.data.model.Playlist
 import com.sona.player.data.model.Song
 
@@ -60,6 +70,7 @@ sealed interface PlaylistViewTarget {
     data class Favorites(val songs: List<Song>) : PlaylistViewTarget
     data class RecentlyAdded(val songs: List<Song>) : PlaylistViewTarget
     data class MostPlayed(val songs: List<Song>) : PlaylistViewTarget
+    data class AutomixSet(val vibe: AutomixVibe, val songs: List<Song>) : PlaylistViewTarget
     data class Custom(val playlist: Playlist, val songs: List<Song>) : PlaylistViewTarget
 }
 
@@ -70,11 +81,15 @@ fun PlaylistsTabScreen(
     favoriteSongs: List<Song>,
     recentlyAddedSongs: List<Song>,
     mostPlayedSongs: List<Song>,
+    automixSets: Map<AutomixVibe, List<Song>> = emptyMap(),
     currentPlayingSongId: Long?,
     isPlaying: Boolean,
     onOpenFavorites: () -> Unit,
     onOpenRecentlyAdded: () -> Unit,
     onOpenMostPlayed: () -> Unit,
+    onOpenAutomixSet: (AutomixVibe) -> Unit = {},
+    onPlayAutomixSet: (AutomixVibe, List<Song>) -> Unit = { _, _ -> },
+    onSaveAutomixSetAsPlaylist: (AutomixVibe, List<Song>) -> Unit = { _, _ -> },
     onOpenCustomPlaylist: (Playlist) -> Unit,
     onBackToRoot: () -> Unit,
     onCreatePlaylistClick: () -> Unit,
@@ -92,9 +107,15 @@ fun PlaylistsTabScreen(
                 favoritesCount = favoriteSongs.size,
                 recentlyAddedCount = recentlyAddedSongs.size,
                 mostPlayedCount = mostPlayedSongs.size,
+                automixSets = automixSets,
                 onOpenFavorites = onOpenFavorites,
                 onOpenRecentlyAdded = onOpenRecentlyAdded,
                 onOpenMostPlayed = onOpenMostPlayed,
+                onOpenAutomixSet = onOpenAutomixSet,
+                onPlayAutomixSet = { vibe ->
+                    val songs = automixSets[vibe] ?: emptyList()
+                    onPlayAutomixSet(vibe, songs)
+                },
                 onOpenCustomPlaylist = onOpenCustomPlaylist,
                 onCreatePlaylistClick = onCreatePlaylistClick,
                 onDeletePlaylist = onDeletePlaylist
@@ -167,6 +188,31 @@ fun PlaylistsTabScreen(
                 }
             )
         }
+        is PlaylistViewTarget.AutomixSet -> {
+            val vibe = currentView.vibe
+            val (icon, iconColor) = when (vibe) {
+                AutomixVibe.HIGH_ENERGY -> Icons.Rounded.ElectricBolt to Color(0xFFFF7043)
+                AutomixVibe.CHILL -> Icons.Rounded.Spa to Color(0xFF26A69A)
+                AutomixVibe.INSTRUMENTAL -> Icons.Rounded.GraphicEq to Color(0xFFAB47BC)
+                AutomixVibe.NIGHT_DRIVE -> Icons.Rounded.Nightlife to Color(0xFF42A5F5)
+            }
+            PlaylistDetailView(
+                title = stringResource(vibe.titleRes),
+                subtitle = stringResource(vibe.subtitleRes),
+                icon = icon,
+                iconColor = iconColor,
+                songs = currentView.songs,
+                currentPlayingSongId = currentPlayingSongId,
+                isPlaying = isPlaying,
+                onBack = onBackToRoot,
+                onPlayAll = { onPlayAutomixSet(vibe, currentView.songs) },
+                onShuffleAll = { onPlayAutomixSet(vibe, currentView.songs) },
+                onPlaySong = { song -> onPlaySong(song, currentView.songs) },
+                onTrackOptionsClick = onTrackOptionsClick,
+                isSmart = true,
+                onSaveAsPlaylist = { onSaveAutomixSetAsPlaylist(vibe, currentView.songs) }
+            )
+        }
     }
 }
 
@@ -176,9 +222,12 @@ private fun PlaylistsRootView(
     favoritesCount: Int,
     recentlyAddedCount: Int,
     mostPlayedCount: Int,
+    automixSets: Map<AutomixVibe, List<Song>> = emptyMap(),
     onOpenFavorites: () -> Unit,
     onOpenRecentlyAdded: () -> Unit,
     onOpenMostPlayed: () -> Unit,
+    onOpenAutomixSet: (AutomixVibe) -> Unit = {},
+    onPlayAutomixSet: (AutomixVibe) -> Unit = {},
     onOpenCustomPlaylist: (Playlist) -> Unit,
     onCreatePlaylistClick: () -> Unit,
     onDeletePlaylist: (Playlist) -> Unit
@@ -228,6 +277,42 @@ private fun PlaylistsRootView(
                 iconColor = MaterialTheme.colorScheme.secondary,
                 containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f),
                 onClick = onOpenMostPlayed
+            )
+        }
+
+        // Dedicated Automix Sets Section & Carousel
+        item {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Text(
+                        text = stringResource(R.string.playlists_automix_sets_section),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = stringResource(R.string.playlists_automix_sets_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            AutomixSetsCarousel(
+                automixSets = automixSets,
+                onOpenAutomixSet = onOpenAutomixSet,
+                onPlayAutomixSet = onPlayAutomixSet
             )
         }
 
@@ -294,14 +379,14 @@ private fun PlaylistsRootView(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            color = if (playlist.isSmart) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.tertiaryContainer,
                             modifier = Modifier.size(44.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
-                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                    imageVector = if (playlist.isSmart) Icons.Rounded.AutoAwesome else Icons.AutoMirrored.Rounded.QueueMusic,
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                    tint = if (playlist.isSmart) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onTertiaryContainer
                                 )
                             }
                         }
@@ -309,13 +394,42 @@ private fun PlaylistsRootView(
                         Spacer(modifier = Modifier.width(14.dp))
 
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = playlist.name,
-                                style = MaterialTheme.typography.bodyLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = playlist.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                if (playlist.isSmart) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.AutoAwesome,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(11.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = stringResource(R.string.smart_badge),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             Text(
                                 text = stringResource(R.string.playlist_tracks_count, playlist.trackCount),
                                 style = MaterialTheme.typography.bodyMedium,
@@ -426,7 +540,9 @@ private fun PlaylistDetailView(
     onShuffleAll: () -> Unit,
     onPlaySong: (Song) -> Unit,
     onTrackOptionsClick: (Song) -> Unit,
-    onRemoveTrack: ((Song) -> Unit)? = null
+    onRemoveTrack: ((Song) -> Unit)? = null,
+    isSmart: Boolean = false,
+    onSaveAsPlaylist: (() -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Top navigation bar with Back button and playlist info
@@ -446,22 +562,61 @@ private fun PlaylistDetailView(
             Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (isSmart) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = stringResource(R.string.smart_badge),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+
+            if (onSaveAsPlaylist != null) {
+                IconButton(onClick = onSaveAsPlaylist) {
+                    Icon(
+                        imageVector = Icons.Rounded.BookmarkAdd,
+                        contentDescription = stringResource(R.string.smart_mix_save_action),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
 
-        // Action Buttons: Play All & Shuffle
+        // Action Buttons: Play All & Shuffle / Save
         if (songs.isNotEmpty()) {
             Row(
                 modifier = Modifier
@@ -474,19 +629,34 @@ private fun PlaylistDetailView(
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(14.dp)
                 ) {
-                    Icon(imageVector = Icons.Rounded.PlayArrow, contentDescription = null)
+                    Icon(
+                        imageVector = if (isSmart) Icons.Rounded.AutoAwesome else Icons.Rounded.PlayArrow,
+                        contentDescription = null
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_play))
+                    Text(if (isSmart) stringResource(R.string.home_quick_mix) else stringResource(R.string.action_play))
                 }
 
-                FilledTonalButton(
-                    onClick = onShuffleAll,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Icon(imageVector = Icons.Rounded.Shuffle, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_shuffle))
+                if (isSmart && onSaveAsPlaylist != null) {
+                    FilledTonalButton(
+                        onClick = onSaveAsPlaylist,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(imageVector = Icons.Rounded.BookmarkAdd, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_save))
+                    }
+                } else {
+                    FilledTonalButton(
+                        onClick = onShuffleAll,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(imageVector = Icons.Rounded.Shuffle, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_shuffle))
+                    }
                 }
             }
         }
@@ -518,6 +688,172 @@ private fun PlaylistDetailView(
                         onClick = { onPlaySong(song) },
                         onOptionsClick = { onTrackOptionsClick(song) }
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AutomixSetsCarousel(
+    automixSets: Map<AutomixVibe, List<Song>>,
+    onOpenAutomixSet: (AutomixVibe) -> Unit,
+    onPlayAutomixSet: (AutomixVibe) -> Unit
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 0.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        items(AutomixVibe.entries.toTypedArray(), key = { it.id }) { vibe ->
+            val songs = automixSets[vibe] ?: emptyList()
+            AutomixSetCard(
+                vibe = vibe,
+                trackCount = songs.size,
+                onClick = { onOpenAutomixSet(vibe) },
+                onPlay = { onPlayAutomixSet(vibe) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AutomixSetCard(
+    vibe: AutomixVibe,
+    trackCount: Int,
+    onClick: () -> Unit,
+    onPlay: () -> Unit
+) {
+    val (gradientColors, icon, accentColor) = when (vibe) {
+        AutomixVibe.HIGH_ENERGY -> Triple(
+            listOf(Color(0xFF381207), Color(0xFF1F0D09)),
+            Icons.Rounded.ElectricBolt,
+            Color(0xFFFF7043)
+        )
+        AutomixVibe.CHILL -> Triple(
+            listOf(Color(0xFF072728), Color(0xFF0A191C)),
+            Icons.Rounded.Spa,
+            Color(0xFF26A69A)
+        )
+        AutomixVibe.INSTRUMENTAL -> Triple(
+            listOf(Color(0xFF221133), Color(0xFF140D24)),
+            Icons.Rounded.GraphicEq,
+            Color(0xFFBA68C8)
+        )
+        AutomixVibe.NIGHT_DRIVE -> Triple(
+            listOf(Color(0xFF0C192E), Color(0xFF0A101C)),
+            Icons.Rounded.Nightlife,
+            Color(0xFF42A5F5)
+        )
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = Color.Transparent,
+        modifier = Modifier
+            .width(176.dp)
+            .height(184.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(gradientColors))
+                .padding(14.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = accentColor.copy(alpha = 0.20f),
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = CircleShape,
+                        color = accentColor.copy(alpha = 0.25f),
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .clickable(onClick = onPlay)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.PlayArrow,
+                                contentDescription = stringResource(R.string.action_play),
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+
+                Column {
+                    Text(
+                        text = stringResource(vibe.titleRes),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(vibe.subtitleRes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.65f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color.White.copy(alpha = 0.12f)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.playlist_tracks_count, trackCount),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Medium,
+                            color = Color.White.copy(alpha = 0.90f),
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = accentColor.copy(alpha = 0.22f)
+                    ) {
+                        Text(
+                            text = "DJ MIX",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = accentColor,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                        )
+                    }
                 }
             }
         }

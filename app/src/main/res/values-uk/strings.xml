@@ -71,6 +71,8 @@
     <string name="sort_duration_asc">За тривалістю (зростання)</string>
 
     <!-- Track Options Context Menu -->
+    <string name="menu_start_smart_mix">Смарт-мікс з треку</string>
+    <string name="menu_start_smart_mix_desc">Гармонійний DJ-сет, що починається з цього треку</string>
     <string name="menu_play_next">Відтворити наступним</string>
     <string name="menu_play_next_desc">Вставити в чергу після поточного треку</string>
     <string name="menu_add_to_queue">Додати до черги</string>
@@ -122,7 +124,25 @@
 
     <!-- Playlists -->
     <string name="playlists_smart_section">Смарт-добірки</string>
+    <string name="playlists_automix_sets_section">Автомікс DJ-сети</string>
+    <string name="playlists_automix_sets_desc">Гармонійні сети з плавним зведенням на основі аналізу треків</string>
     <string name="playlists_my_section">Мої плейлисти</string>
+    <string name="vibe_high_energy_title">Година пік (Драйв)</string>
+    <string name="vibe_high_energy_sub">Висока енергія • Швидкі переходи</string>
+    <string name="vibe_high_energy_desc">Енергійні бенгери та запальний ритм з плавним зведенням.</string>
+    <string name="vibe_chill_title">Глибокий чил</string>
+    <string name="vibe_chill_sub">Даунтемпо • Розслаблений флоу</string>
+    <string name="vibe_chill_desc">М\'які ритми та тепле ембієнт-звучання для відпочинку й релаксу.</string>
+    <string name="vibe_instrumental_title">Інструментал &amp; Фокус</string>
+    <string name="vibe_instrumental_sub">Ритм і концентрація • Без вокалу</string>
+    <string name="vibe_instrumental_desc">Інструментальні треки без вокалу, ідеальні для роботи та навчання.</string>
+    <string name="vibe_night_drive_title">Нічний драйв</string>
+    <string name="vibe_night_drive_sub">Мелодійний грув • 100-128 BPM</string>
+    <string name="vibe_night_drive_desc">Гіпнотичні ритми та гармонійні переходи для вечірньої поїздки.</string>
+    <string name="smart_badge">СМАРТ-МІКС</string>
+    <string name="smart_mix_save_action">Зберегти як смарт-плейлист</string>
+    <string name="smart_mix_saved_toast">Смарт-мікс збережено у плейлисти</string>
+    <string name="smart_mix_for_track">Мікс: %s</string>
     <string name="smart_playlist_favorites">Улюблені</string>
     <string name="smart_playlist_favorites_count">%d треків</string>
     <string name="smart_playlist_recently_added">Нещодавно додані</string>
@@ -184,4 +204,12 @@
     <string name="analysis_preparing">Підготовка…</string>
     <string name="analysis_timeout">Android зупинив тривалу обробку. Готові результати збережено; аналіз можна продовжити.</string>
     <string name="queue_transition_quality">Прогноз переходу: %1$d%% • Достовірність: %2$d%%</string>
+    <!-- Sona Live -->
+    <string name="sona_live_mixing">Перехід до %1$s…</string>
+    <string name="sona_live_queue_updated">Smart Shuffle оновив чергу</string>
+    <string name="sona_live_paused">Відтворення на паузі</string>
+    <string name="sona_live_smart_shuffle">Smart Shuffle добирає треки…</string>
+    <string name="sona_live_repeating">На повторі: %1$s</string>
+    <string name="sona_live_up_next">Далі: %1$s</string>
+    <string name="sona_live_queue_end">Останній трек у черзі</string>
 </resources>

@@ -109,6 +109,7 @@ fun MainScreen(
     val favoriteSongs by viewModel.favoriteSongs.collectAsState()
     val recentlyAddedSongs by viewModel.recentlyAddedSongs.collectAsState()
     val mostPlayedSongs by viewModel.mostPlayedSongs.collectAsState()
+    val automixSets by viewModel.automixVibeSets.collectAsState()
     val albums by viewModel.albums.collectAsState()
     val artists by viewModel.artists.collectAsState()
 
@@ -218,6 +219,7 @@ fun MainScreen(
                     song = playerState.currentSong,
                     isPlaying = playerState.isPlaying,
                     progress = progress,
+                    automixState = playerState.automix,
                     onPlayPauseClick = { viewModel.togglePlayPause() },
                     onNextClick = { viewModel.skipToNext() },
                     onClick = { isNowPlayingExpanded = true }
@@ -390,11 +392,23 @@ fun MainScreen(
                         favoriteSongs = favoriteSongs,
                         recentlyAddedSongs = recentlyAddedSongs,
                         mostPlayedSongs = mostPlayedSongs,
+                        automixSets = automixSets,
                         currentPlayingSongId = playerState.currentSong?.id,
                         isPlaying = playerState.isPlaying,
                         onOpenFavorites = { viewModel.openFavoritesView() },
                         onOpenRecentlyAdded = { viewModel.openRecentlyAddedView() },
                         onOpenMostPlayed = { viewModel.openMostPlayedView() },
+                        onOpenAutomixSet = { viewModel.openAutomixSet(it) },
+                        onPlayAutomixSet = { vibe, songs -> viewModel.playAutomixSet(vibe, songs) },
+                        onSaveAutomixSetAsPlaylist = { vibe, songs ->
+                            val defaultName = context.getString(vibe.titleRes)
+                            viewModel.saveSmartMixAsPlaylist(
+                                name = defaultName,
+                                smartType = vibe.id,
+                                songs = songs
+                            )
+                            android.widget.Toast.makeText(context, R.string.smart_mix_saved_toast, android.widget.Toast.LENGTH_SHORT).show()
+                        },
                         onOpenCustomPlaylist = { viewModel.openCustomPlaylist(it) },
                         onBackToRoot = { viewModel.closePlaylistSubView() },
                         onCreatePlaylistClick = { viewModel.openCreatePlaylist() },
@@ -432,6 +446,7 @@ fun MainScreen(
             song = song,
             isFavorite = favorites.contains(song.id),
             onDismiss = { viewModel.closeTrackOptions() },
+            onStartSmartMix = { viewModel.startSmartMix(song) },
             onPlayNext = { viewModel.playNext(song) },
             onAddToQueue = { viewModel.addToQueue(song) },
             onToggleFavorite = { viewModel.toggleFavorite(song.id) },
@@ -564,6 +579,7 @@ fun MainScreen(
             queue = playerState.currentQueue,
             currentIndex = playerState.currentIndex,
             automixState = playerState.automix,
+            smartQueueUpdatedAtMs = playerState.smartQueueUpdatedAtMs,
             isFavorite = currentSong != null && favorites.contains(currentSong.id),
             onToggleFavorite = { currentSong?.let { viewModel.toggleFavorite(it.id) } },
             onMoreClick = { currentSong?.let { viewModel.openTrackOptions(it) } },
@@ -578,7 +594,21 @@ fun MainScreen(
             onMoveQueueItem = { from, to -> viewModel.moveQueueItem(from, to) },
             onRemoveQueueItem = { viewModel.removeFromQueue(it) },
             onSeek = { viewModel.seekTo(it) },
-            onDismiss = { isNowPlayingExpanded = false }
+            onDismiss = { isNowPlayingExpanded = false },
+            onSaveQueueAsPlaylist = {
+                val song = playerState.currentSong
+                val queue = playerState.currentQueue
+                if (song != null && queue.isNotEmpty()) {
+                    val name = context.getString(R.string.smart_mix_for_track, song.title)
+                    viewModel.saveSmartMixAsPlaylist(
+                        name = name,
+                        smartType = "SEED",
+                        seedSongId = song.id,
+                        songs = queue
+                    )
+                    android.widget.Toast.makeText(context, R.string.smart_mix_saved_toast, android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
         )
     }
 }

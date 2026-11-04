@@ -62,6 +62,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -84,6 +85,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
+import com.sona.player.automix.TransitionPlan
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.sona.player.automix.TransitionPlanner
 import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixTransitionState
@@ -105,6 +109,7 @@ fun NowPlayingScreen(
     queue: List<Song> = emptyList(),
     currentIndex: Int = 0,
     automixState: AutomixTransitionState = AutomixTransitionState(),
+    smartQueueUpdatedAtMs: Long = 0L,
     isFavorite: Boolean = false,
     onToggleFavorite: () -> Unit = {},
     onMoreClick: () -> Unit = {},
@@ -120,40 +125,47 @@ fun NowPlayingScreen(
     onRemoveQueueItem: (Int) -> Unit = {},
     onSeek: (Long) -> Unit,
     onDismiss: () -> Unit,
+    onSaveQueueAsPlaylist: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (song == null) return
 
     // Динамическое извлечение палитры Monet прямо из обложки текущего трека
     val palette = rememberArtworkPalette(song.albumArtUri)
+    val targetTrack = automixState.transitionTargetSong ?: automixState.nextMatchedSong
+    val targetPalette = rememberArtworkPalette(targetTrack?.albumArtUri)
 
     var isQueueSheetOpen by remember { mutableStateOf(false) }
     var isUserSeeking by remember { mutableFloatStateOf(-1f) }
-    val progress = if (isUserSeeking >= 0f) {
-        isUserSeeking
-    } else if (durationMs > 0) {
+
+    val rawProgress = if (durationMs > 0) {
         (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else {
         0f
     }
 
-    val activeTrackAnalysis = remember(song.id, automixState.currentAnalysis, automixState.analyzedTracks) {
-        automixState.currentAnalysis?.takeIf { it.songId == song.id }
-            ?: automixState.analyzedTracks[song.id]
-    }
-    val activeNextAnalysis = remember(
-        automixState.nextMatchedSong?.id,
-        automixState.nextMatchedAnalysis,
-        automixState.analyzedTracks
-    ) {
-        val nextId = automixState.nextMatchedSong?.id
-        automixState.nextMatchedAnalysis?.takeIf { it.songId == nextId }
-            ?: nextId?.let { automixState.analyzedTracks[it] }
-    }
-    val transitionPreview = remember(activeTrackAnalysis, activeNextAnalysis, automixState.mode, automixState.entryPositionMs) {
+    val progressMotion = rememberAutomixProgressMotion(
+        progress = rawProgress,
+        primaryColor = palette.primaryAccent,
+        isTransitioning = automixState.isTransitioning,
+        targetSongId = targetTrack?.id
+    )
+    val progress = if (isUserSeeking >= 0f) isUserSeeking else rawProgress
+
+    val activeTrackAnalysis = automixState.currentAnalysis?.takeIf { it.songId == song.id }
+        ?: automixState.analyzedTracks[song.id]
+    val nextId = automixState.nextMatchedSong?.id
+    val activeNextAnalysis = automixState.nextMatchedAnalysis?.takeIf { it.songId == nextId }
+        ?: nextId?.let { automixState.analyzedTracks[it] }
+    val transitionPreview by produceState<TransitionPlan?>(null,
+        activeTrackAnalysis, activeNextAnalysis, automixState.mode, automixState.entryPositionMs) {
+        value = null
         if (activeTrackAnalysis != null && activeNextAnalysis != null) {
-            TransitionPlanner.plan(activeTrackAnalysis, activeNextAnalysis, automixState.mode, entryPositionMs = automixState.entryPositionMs)
-        } else null
+            value = withContext(Dispatchers.Default) {
+                TransitionPlanner.plan(activeTrackAnalysis, activeNextAnalysis, automixState.mode,
+                    entryPositionMs = automixState.entryPositionMs)
+            }
+        }
     }
     val displayedMixOutMs = transitionPreview?.mixOutMs?.let { planned ->
         if (automixState.manualSeek) planned else maxOf(planned, com.sona.player.automix.TrackListeningGuard.earliestPosition(
@@ -408,98 +420,66 @@ fun NowPlayingScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Стильная капсула Automix: показывает фазу DJ-сведения («High-Pass Blend», «Bass Swap», «Filter Sweep») или «Up Next»
-                val nextTrack = automixState.nextMatchedSong
-                val targetTrack = automixState.transitionTargetSong ?: nextTrack
-                val showAutomixBanner = automixState.isEnabled && (
-                    (automixState.isTransitioning && targetTrack != null) ||
-                        (progress >= automixZoneFraction && nextTrack != null && nextTrack.id != song.id)
-                    )
-
-                AnimatedContent(
-                    targetState = showAutomixBanner,
-                    transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(200)) },
-                    label = "AutomixBannerTransition"
-                ) { showBanner ->
-                    if (showBanner) {
-                        val bpmText = (if (automixState.isTransitioning) {
-                            automixState.currentAnalysis?.bpm ?: automixState.nextMatchedAnalysis?.bpm
-                        } else {
-                            automixState.nextMatchedAnalysis?.bpm ?: automixState.currentAnalysis?.bpm
-                        })?.roundToInt()
-
-                        val bannerLabel = if (automixState.isTransitioning && targetTrack != null) {
-                            val pct = (automixState.transitionProgress * 100f).roundToInt().coerceIn(1, 100)
-                            val toolBadge = automixState.activeTransitionTool.shortBadge
-                            val tempoDeltaPct = ((automixState.activeTempoRatio - 1.0f) * 100f).roundToInt()
-                            val tempoTag = if (tempoDeltaPct != 0) {
-                                val sign = if (tempoDeltaPct > 0) "+" else ""
-                                " ($sign$tempoDeltaPct%)"
-                            } else ""
-
-                            val djStage = when {
-                                automixState.transitionProgress < 0.44f -> "Automix ($toolBadge) → ${targetTrack.title}"
-                                automixState.transitionProgress < 0.55f -> "Automix (Bass Swap!) → ${targetTrack.title}"
-                                else -> "Automix ($toolBadge $pct%)"
-                            }
-                            if (bpmText != null) {
-                                "$djStage • $bpmText BPM$tempoTag"
-                            } else {
-                                "$djStage$tempoTag"
-                            }
-                        } else {
-                            val upcomingTitle = nextTrack?.title ?: ""
-                            val pairKey = if (nextTrack != null) "${song.id}_${nextTrack.id}" else ""
-                            val upcomingTool = automixState.savedTransitions[pairKey]?.transitionTool?.shortBadge
-                            val toolPrefix = if (upcomingTool != null) "Up Next ($upcomingTool) → " else "Up Next → "
-                            val suffix = if (bpmText != null) " • $bpmText BPM" else ""
-                            "$toolPrefix$upcomingTitle$suffix"
-                        }
-
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = palette.secondaryContainer.copy(alpha = 0.72f),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 8.dp)
-                                .clickable { isQueueSheetOpen = true }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 7.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.AutoAwesome,
-                                    contentDescription = null,
-                                    tint = palette.secondaryAccent,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = bannerLabel,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    } else {
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
+                val nextQueueTrack = when {
+                    repeatMode == Player.REPEAT_MODE_ONE -> song
+                    currentIndex !in queue.indices -> null
+                    currentIndex + 1 < queue.size -> queue[currentIndex + 1]
+                    repeatMode == Player.REPEAT_MODE_ALL -> queue.firstOrNull()
+                    else -> null
                 }
+                val canMixNext = automixState.isEnabled &&
+                    repeatMode != Player.REPEAT_MODE_ONE &&
+                    currentIndex in queue.indices && currentIndex + 1 < queue.size &&
+                    durationMs >= 20_000L
+                val plannedMixOutMs = displayedMixOutMs
+                    ?: activeTrackAnalysis?.effectiveMixOutMs(automixState.mode, activeNextAnalysis)
+                    ?: if (automixState.mode == AutomixMode.QUICK_MID_MIX) {
+                        (durationMs * 0.56f).toLong().coerceAtLeast(15_000L)
+                    } else {
+                        (durationMs - 14_000L).coerceAtLeast((durationMs * 0.72f).toLong())
+                    }
+                val guardedMixOutMs = if (automixState.manualSeek) plannedMixOutMs else maxOf(
+                    plannedMixOutMs,
+                    com.sona.player.automix.TrackListeningGuard.earliestPosition(
+                        currentPositionMs, durationMs, automixState.playedMs, automixState.activeTempoRatio
+                    )
+                )
+                val nextChangeAtMs = if (canMixNext && guardedMixOutMs < durationMs - 2_500L) {
+                    guardedMixOutMs
+                } else durationMs
+                SonaLiveBanner(
+                    songId = song.id,
+                    showUpcoming = isSonaLiveUpcoming(
+                        currentPositionMs, nextChangeAtMs, automixState.activeTempoRatio
+                    ),
+                    isPlaying = isPlaying,
+                    isTransitioning = automixState.isTransitioning,
+                    transitionTitle = automixState.transitionTargetSong?.title
+                        ?: automixState.nextMatchedSong?.title,
+                    nextTitle = nextQueueTrack?.title,
+                    repeatOne = repeatMode == Player.REPEAT_MODE_ONE,
+                    smartShuffleEnabled = shuffleMode == ShuffleMode.SMART,
+                    isAnalyzing = automixState.isAnalyzing,
+                    smartQueueUpdatedAtMs = smartQueueUpdatedAtMs,
+                    containerColor = palette.secondaryContainer.copy(alpha = 0.72f),
+                    accentColor = palette.secondaryAccent,
+                    onClick = { isQueueSheetOpen = true },
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
 
                 // Вариант 2: Фирменный волновой прогресс-бар Sona с реальной точкой аутро (automixZoneStartFraction)
                 ExpressiveWaveSlider(
                     progress = progress,
+                    animatedProgress = if (isUserSeeking >= 0f) null else progressMotion.progress,
                     isPlaying = isPlaying,
-                    primaryColor = palette.primaryAccent,
+                    primaryColor = progressMotion.outgoingColor,
                     automixAccentColor = palette.secondaryAccent,
                     automixZoneStartFraction = automixZoneFraction,
+                    isTransitioning = automixState.isTransitioning,
+                    transitionProgress = automixState.transitionProgress,
+                    targetPrimaryColor = targetTrack?.let { targetPalette.primaryAccent },
+                    bpm = activeTrackAnalysis?.bpm,
+                    activeTempoRatio = automixState.activeTempoRatio,
                     onValueChange = { fraction ->
                         isUserSeeking = fraction
                     },
@@ -769,7 +749,8 @@ fun NowPlayingScreen(
                     onMoveTrack = { from, to -> onMoveQueueItem(from, to) },
                     onRemoveTrack = { idx -> onRemoveQueueItem(idx) },
                     onToggleAutomix = onAutomixClick,
-                    onDismiss = { isQueueSheetOpen = false }
+                    onDismiss = { isQueueSheetOpen = false },
+                    onSaveAsSmartPlaylist = onSaveQueueAsPlaylist
                 )
             }
         }

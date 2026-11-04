@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -52,6 +53,7 @@ fun TrackOptionsMenuSheet(
     song: Song,
     isFavorite: Boolean,
     onDismiss: () -> Unit,
+    onStartSmartMix: () -> Unit = {},
     onPlayNext: () -> Unit,
     onAddToQueue: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -128,6 +130,17 @@ fun TrackOptionsMenuSheet(
             Spacer(modifier = Modifier.height(8.dp))
 
             // Action Items
+            MenuActionItem(
+                icon = Icons.Rounded.AutoAwesome,
+                iconTint = MaterialTheme.colorScheme.primary,
+                title = stringResource(R.string.menu_start_smart_mix),
+                subtitle = stringResource(R.string.menu_start_smart_mix_desc),
+                onClick = {
+                    onStartSmartMix()
+                    onDismiss()
+                }
+            )
+
             MenuActionItem(
                 icon = Icons.Rounded.SkipNext,
                 title = stringResource(R.string.menu_play_next),

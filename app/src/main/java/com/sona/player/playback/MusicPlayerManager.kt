@@ -21,6 +21,7 @@ data class PlayerState(
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val currentQueue: List<Song> = emptyList(),
     val currentIndex: Int = -1,
+    val smartQueueUpdatedAtMs: Long = 0L,
     val automix: AutomixTransitionState = AutomixTransitionState()
 )
 
@@ -38,6 +39,14 @@ class MusicPlayerManager(private val context: Context) {
     fun needsLibraryAnalysis(songId: Long) = engine.needsLibraryAnalysis(songId)
 
     suspend fun analyzeLibrarySong(song: Song, force: Boolean) = engine.analyzeLibrarySong(song, force)
+
+    fun getAllCachedAnalysis() = engine.getAllCachedAnalysis()
+
+    fun getCachedAnalysis(songId: Long) = engine.getCachedAnalysis(songId)
+
+    fun setAutomixMode(mode: com.sona.player.automix.AutomixMode) = engine.setAutomixMode(mode)
+
+    fun setShuffleMode(mode: ShuffleMode) = engine.setShuffleMode(mode)
 
     fun init() {
         val sessionToken = SessionToken(context, ComponentName(context, PlaybackService::class.java))

@@ -62,6 +62,23 @@ class UserLibraryRepository(private val context: Context) {
         id
     }
 
+    suspend fun createSmartPlaylist(name: String, smartType: String, seedSongId: Long? = null, initialTrackIds: List<Long> = emptyList()): Long = withContext(Dispatchers.IO) {
+        val id = dbHelper.createSmartPlaylist(name, smartType, seedSongId)
+        if (id > 0 && initialTrackIds.isNotEmpty()) {
+            dbHelper.replacePlaylistTracks(id, initialTrackIds)
+        }
+        _playlists.value = dbHelper.getAllPlaylists()
+        id
+    }
+
+    suspend fun updatePlaylistTracks(playlistId: Long, trackIds: List<Long>): Boolean = withContext(Dispatchers.IO) {
+        val success = dbHelper.replacePlaylistTracks(playlistId, trackIds)
+        if (success) {
+            _playlists.value = dbHelper.getAllPlaylists()
+        }
+        success
+    }
+
     suspend fun renamePlaylist(playlistId: Long, newName: String): Boolean = withContext(Dispatchers.IO) {
         val success = dbHelper.renamePlaylist(playlistId, newName)
         if (success) {

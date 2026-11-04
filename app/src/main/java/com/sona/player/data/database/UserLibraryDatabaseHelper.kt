@@ -14,7 +14,7 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
 ) {
     companion object {
         private const val DATABASE_NAME = "sona_user_library.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
 
         // Favorites table
         private const val TABLE_FAVORITES = "favorites"
@@ -26,6 +26,8 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
         private const val COL_PLAYLIST_ID = "id"
         private const val COL_PLAYLIST_NAME = "name"
         private const val COL_PLAYLIST_CREATED_AT = "created_at"
+        private const val COL_PLAYLIST_SMART_TYPE = "smart_type"
+        private const val COL_PLAYLIST_SEED_SONG_ID = "seed_song_id"
 
         // Playlist tracks
         private const val TABLE_PLAYLIST_TRACKS = "playlist_tracks"
@@ -65,7 +67,9 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
             CREATE TABLE IF NOT EXISTS $TABLE_PLAYLISTS (
                 $COL_PLAYLIST_ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 $COL_PLAYLIST_NAME TEXT NOT NULL,
-                $COL_PLAYLIST_CREATED_AT INTEGER NOT NULL
+                $COL_PLAYLIST_CREATED_AT INTEGER NOT NULL,
+                $COL_PLAYLIST_SMART_TYPE TEXT DEFAULT NULL,
+                $COL_PLAYLIST_SEED_SONG_ID INTEGER DEFAULT NULL
             );
             """.trimIndent()
         )
@@ -95,7 +99,10 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Future migrations
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE $TABLE_PLAYLISTS ADD COLUMN $COL_PLAYLIST_SMART_TYPE TEXT DEFAULT NULL")
+            db.execSQL("ALTER TABLE $TABLE_PLAYLISTS ADD COLUMN $COL_PLAYLIST_SEED_SONG_ID INTEGER DEFAULT NULL")
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -160,6 +167,7 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
         val db = readableDatabase
         val query = """
             SELECT p.$COL_PLAYLIST_ID, p.$COL_PLAYLIST_NAME, p.$COL_PLAYLIST_CREATED_AT,
+                   p.$COL_PLAYLIST_SMART_TYPE, p.$COL_PLAYLIST_SEED_SONG_ID,
                    COUNT(pt.$COL_PT_SONG_ID) AS track_count
             FROM $TABLE_PLAYLISTS p
             LEFT JOIN $TABLE_PLAYLIST_TRACKS pt ON p.$COL_PLAYLIST_ID = pt.$COL_PT_PLAYLIST_ID
@@ -171,15 +179,20 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
             val idCol = cursor.getColumnIndexOrThrow(COL_PLAYLIST_ID)
             val nameCol = cursor.getColumnIndexOrThrow(COL_PLAYLIST_NAME)
             val createdCol = cursor.getColumnIndexOrThrow(COL_PLAYLIST_CREATED_AT)
+            val smartTypeCol = cursor.getColumnIndexOrThrow(COL_PLAYLIST_SMART_TYPE)
+            val seedSongIdCol = cursor.getColumnIndexOrThrow(COL_PLAYLIST_SEED_SONG_ID)
             val countCol = cursor.getColumnIndexOrThrow("track_count")
 
             while (cursor.moveToNext()) {
+                val seedSongId = if (!cursor.isNull(seedSongIdCol)) cursor.getLong(seedSongIdCol) else null
                 playlists.add(
                     Playlist(
                         id = cursor.getLong(idCol),
                         name = cursor.getString(nameCol),
                         trackCount = cursor.getInt(countCol),
-                        createdAt = cursor.getLong(createdCol)
+                        createdAt = cursor.getLong(createdCol),
+                        smartType = cursor.getString(smartTypeCol),
+                        seedSongId = seedSongId
                     )
                 )
             }
@@ -194,6 +207,45 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
             put(COL_PLAYLIST_CREATED_AT, System.currentTimeMillis())
         }
         return db.insert(TABLE_PLAYLISTS, null, values)
+    }
+
+    fun createSmartPlaylist(name: String, smartType: String, seedSongId: Long? = null): Long {
+        val db = writableDatabase
+        val values = ContentValues().apply {
+            put(COL_PLAYLIST_NAME, name.trim())
+            put(COL_PLAYLIST_CREATED_AT, System.currentTimeMillis())
+            put(COL_PLAYLIST_SMART_TYPE, smartType)
+            if (seedSongId != null) {
+                put(COL_PLAYLIST_SEED_SONG_ID, seedSongId)
+            } else {
+                putNull(COL_PLAYLIST_SEED_SONG_ID)
+            }
+        }
+        return db.insert(TABLE_PLAYLISTS, null, values)
+    }
+
+    fun replacePlaylistTracks(playlistId: Long, songIds: List<Long>): Boolean {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(TABLE_PLAYLIST_TRACKS, "$COL_PT_PLAYLIST_ID = ?", arrayOf(playlistId.toString()))
+            val now = System.currentTimeMillis()
+            songIds.forEachIndexed { index, songId ->
+                val values = ContentValues().apply {
+                    put(COL_PT_PLAYLIST_ID, playlistId)
+                    put(COL_PT_SONG_ID, songId)
+                    put(COL_PT_POSITION, index)
+                    put(COL_PT_ADDED_AT, now)
+                }
+                db.insertWithOnConflict(TABLE_PLAYLIST_TRACKS, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            db.setTransactionSuccessful()
+            return true
+        } catch (_: Exception) {
+            return false
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun renamePlaylist(playlistId: Long, newName: String): Boolean {

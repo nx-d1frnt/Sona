@@ -3,6 +3,10 @@ package com.sona.player.ui.main
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.sona.player.automix.AutomixMode
+import com.sona.player.automix.AutomixVibe
+import com.sona.player.automix.ShuffleMode
+import com.sona.player.automix.SmartMixGenerator
 import com.sona.player.data.model.Album
 import com.sona.player.data.model.Artist
 import com.sona.player.data.model.Playlist
@@ -15,6 +19,7 @@ import com.sona.player.playback.MusicPlayerManager
 import com.sona.player.playback.PlayerState
 import com.sona.player.ui.components.ArtistAlbumViewTarget
 import com.sona.player.ui.components.PlaylistViewTarget
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -138,6 +143,24 @@ class MainViewModel(
             .sortedByDescending { stats[it.id] ?: 0 }
             .take(100)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val automixVibeSets: StateFlow<Map<AutomixVibe, List<Song>>> = combine(
+        _rawSongs,
+        playerManager.libraryAnalysis,
+        playStats
+    ) { songs, _, stats ->
+        if (songs.isEmpty()) emptyMap()
+        else {
+            AutomixVibe.entries.associateWith { vibe ->
+                SmartMixGenerator.generateVibeMix(
+                    vibe = vibe,
+                    allSongs = songs,
+                    analysisProvider = { playerManager.getCachedAnalysis(it) },
+                    playStats = stats
+                )
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
     val albums: StateFlow<List<Album>> = combine(_rawSongs) { (songs) ->
         UserLibraryRepository.extractAlbums(songs)
@@ -277,10 +300,111 @@ class MainViewModel(
         _playlistViewTarget.value = PlaylistViewTarget.MostPlayed(mostPlayedSongs.value)
     }
 
+    fun openAutomixSet(vibe: AutomixVibe) {
+        val songs = automixVibeSets.value[vibe] ?: SmartMixGenerator.generateVibeMix(
+            vibe = vibe,
+            allSongs = _rawSongs.value,
+            analysisProvider = { playerManager.getCachedAnalysis(it) },
+            playStats = playStats.value
+        )
+        triggerMicroAnalysisIfNeeded(songs.size)
+        _playlistViewTarget.value = PlaylistViewTarget.AutomixSet(vibe, songs)
+    }
+
+    fun playAutomixSet(vibe: AutomixVibe, songs: List<Song>? = null) {
+        val listToPlay = songs ?: automixVibeSets.value[vibe] ?: SmartMixGenerator.generateVibeMix(
+            vibe = vibe,
+            allSongs = _rawSongs.value,
+            analysisProvider = { playerManager.getCachedAnalysis(it) },
+            playStats = playStats.value
+        )
+        if (listToPlay.isEmpty()) return
+        triggerMicroAnalysisIfNeeded(listToPlay.size)
+        playerManager.setAutomixMode(AutomixMode.AUTO_DJ)
+        playerManager.setShuffleMode(ShuffleMode.OFF)
+        playerManager.playQueue(listToPlay, 0)
+    }
+
+    fun startSmartMix(seedSong: Song) {
+        closeTrackOptions()
+        viewModelScope.launch {
+            val mix = SmartMixGenerator.generateSeedMix(
+                seedSong = seedSong,
+                allSongs = _rawSongs.value,
+                analysisProvider = { playerManager.getCachedAnalysis(it) },
+                playStats = playStats.value
+            )
+            triggerMicroAnalysisIfNeeded(mix.size)
+            playerManager.setAutomixMode(AutomixMode.AUTO_DJ)
+            playerManager.setShuffleMode(ShuffleMode.OFF)
+            playerManager.playQueue(mix, 0)
+        }
+    }
+
+    fun saveSmartMixAsPlaylist(name: String, smartType: String, seedSongId: Long? = null, songs: List<Song>) {
+        viewModelScope.launch {
+            userLibraryRepository.createSmartPlaylist(
+                name = name,
+                smartType = smartType,
+                seedSongId = seedSongId,
+                initialTrackIds = songs.map { it.id }
+            )
+        }
+    }
+
+    private fun triggerMicroAnalysisIfNeeded(matchCount: Int) {
+        if (matchCount >= 15) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val unanalyzed = _rawSongs.value.filter { playerManager.needsLibraryAnalysis(it.id) }.take(12)
+            for (song in unanalyzed) {
+                try {
+                    playerManager.analyzeLibrarySong(song, force = false)
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     fun openCustomPlaylist(playlist: Playlist) {
         viewModelScope.launch {
-            val trackIds = userLibraryRepository.getPlaylistTrackIds(playlist.id).toSet()
-            val songs = _rawSongs.value.filter { trackIds.contains(it.id) }
+            val songs: List<Song>
+            if (playlist.isSmart) {
+                val regenerated = when {
+                    playlist.smartType == "SEED" && playlist.seedSongId != null -> {
+                        val seedSong = _rawSongs.value.firstOrNull { it.id == playlist.seedSongId }
+                        if (seedSong != null) {
+                            SmartMixGenerator.generateSeedMix(
+                                seedSong = seedSong,
+                                allSongs = _rawSongs.value,
+                                analysisProvider = { playerManager.getCachedAnalysis(it) },
+                                playStats = playStats.value
+                            )
+                        } else null
+                    }
+                    AutomixVibe.fromId(playlist.smartType) != null -> {
+                        val vibe = AutomixVibe.fromId(playlist.smartType)!!
+                        SmartMixGenerator.generateVibeMix(
+                            vibe = vibe,
+                            allSongs = _rawSongs.value,
+                            analysisProvider = { playerManager.getCachedAnalysis(it) },
+                            playStats = playStats.value
+                        )
+                    }
+                    else -> null
+                }
+
+                if (!regenerated.isNullOrEmpty()) {
+                    songs = regenerated
+                    userLibraryRepository.updatePlaylistTracks(playlist.id, songs.map { it.id })
+                } else {
+                    val trackIds = userLibraryRepository.getPlaylistTrackIds(playlist.id)
+                    val idMap = _rawSongs.value.associateBy { it.id }
+                    songs = trackIds.mapNotNull { idMap[it] }
+                }
+            } else {
+                val trackIds = userLibraryRepository.getPlaylistTrackIds(playlist.id)
+                val idMap = _rawSongs.value.associateBy { it.id }
+                songs = trackIds.mapNotNull { idMap[it] }
+            }
             _playlistViewTarget.value = PlaylistViewTarget.Custom(playlist, songs)
         }
     }

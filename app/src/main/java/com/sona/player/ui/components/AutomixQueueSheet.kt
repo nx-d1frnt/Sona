@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -75,6 +76,7 @@ fun AutomixQueueSheet(
     onRemoveTrack: (Int) -> Unit,
     onToggleAutomix: () -> Unit,
     onDismiss: () -> Unit,
+    onSaveAsSmartPlaylist: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -188,6 +190,25 @@ fun AutomixQueueSheet(
                         }
                     }
 
+                    if (onSaveAsSmartPlaylist != null && queue.isNotEmpty()) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.White.copy(alpha = 0.10f),
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(36.dp)
+                        ) {
+                            IconButton(onClick = onSaveAsSmartPlaylist) {
+                                Icon(
+                                    imageVector = Icons.Rounded.BookmarkAdd,
+                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.smart_mix_save_action),
+                                    tint = palette.primaryAccent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Surface(
                         shape = CircleShape,
                         color = Color.White.copy(alpha = 0.10f),
@@ -210,13 +231,22 @@ fun AutomixQueueSheet(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    queue.forEachIndexed { index, track ->
-                        val isCurrent = (index == currentIndex) || (track.id == currentSong?.id && index == currentIndex)
-                        val isPlayed = index < currentIndex
-                        val analysis = automixState.analyzedTracks[track.id]
-                            ?: if (isCurrent) automixState.currentAnalysis else null
-
-                        item(key = "track_${track.id}_$index") {
+                    items(
+                        count = (queue.size * 2 - 1).coerceAtLeast(0),
+                        key = { slot ->
+                            val index = slot / 2
+                            if (slot % 2 == 0) "track_${queue[index].id}_$index"
+                            else "transition_${queue[index].id}_${queue[index + 1].id}_$index"
+                        },
+                        contentType = { slot -> slot % 2 }
+                    ) { slot ->
+                        val index = slot / 2
+                        val track = queue[index]
+                        if (slot % 2 == 0) {
+                            val isCurrent = index == currentIndex
+                            val isPlayed = index < currentIndex
+                            val analysis = automixState.analyzedTracks[track.id]
+                                ?: if (isCurrent) automixState.currentAnalysis else null
                             QueueTrackRow(
                                 index = index,
                                 song = track,
@@ -233,21 +263,12 @@ fun AutomixQueueSheet(
                                 onMoveDown = { onMoveTrack(index, index + 1) },
                                 onRemove = { onRemoveTrack(index) }
                             )
-                        }
-
-                        // Render DJ Transition Connector between track[index] and track[index + 1]
-                        if (automixState.isEnabled && index < queue.lastIndex) {
+                        } else if (automixState.isEnabled) {
                             val nextSongInQueue = queue[index + 1]
-                            val key = SavedTransition.key(track.id, nextSongInQueue.id)
-                            // Planned in the background by the engine; never plan on the UI thread here.
-                            val savedTransition = automixState.savedTransitions[key]
-
+                            val savedTransition = automixState.savedTransitions[SavedTransition.key(track.id, nextSongInQueue.id)]
                             val isLiveTransitionHere = automixState.isTransitioning && (
                                 (automixState.transitionFromSongId == track.id && automixState.transitionTargetSong?.id == nextSongInQueue.id) ||
-                                    (index == currentIndex && automixState.transitionTargetSong?.id == nextSongInQueue.id)
-                                )
-
-                            item(key = "transition_${track.id}_${nextSongInQueue.id}_$index") {
+                                    (index == currentIndex && automixState.transitionTargetSong?.id == nextSongInQueue.id))
                                 TransitionConnectorItem(
                                     savedTransition = savedTransition,
                                     isLiveTransition = isLiveTransitionHere,
@@ -255,11 +276,8 @@ fun AutomixQueueSheet(
                                     isPastTransition = index < currentIndex && !isLiveTransitionHere,
                                     palette = palette
                                 )
-                            }
-                        } else if (index < queue.lastIndex) {
-                            item(key = "spacer_$index") {
-                                Spacer(modifier = Modifier.height(6.dp))
-                            }
+                        } else {
+                            Spacer(modifier = Modifier.height(6.dp))
                         }
                     }
                 }

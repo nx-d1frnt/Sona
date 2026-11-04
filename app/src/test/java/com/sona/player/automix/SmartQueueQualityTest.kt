@@ -96,4 +96,87 @@ class SmartQueueQualityTest {
         assertEquals(queue, AutomixQueueSelector.buildSmartQueue(queue, -1, { analyses[it] }))
         assertEquals(queue, AutomixQueueSelector.buildSmartQueue(queue, 0, { null }))
     }
+    @Test fun firstBatchCostIsBoundedWithTenThousandTracks() {
+        val queue = (1L..10_000L).map { song(it) }
+        val analyses = queue.associate { it.id to analysis(it.id).copy(beatSections = emptyList(), vocalSections = emptyList()) }
+        var reads = 0
+        val started = System.nanoTime()
+        val ordered = AutomixQueueSelector.buildSmartQueue(queue, 0, {
+            reads++
+            analyses[it]
+        }, maxLinks = 8)
+        val elapsed = (System.nanoTime() - started) / 1_000_000
+        println("SMART 10000 tracks, first 8 links: ${elapsed}ms, $reads analysis lookups")
+        assertTrue("Batch must not scan/plan the entire library: $reads", reads <= 8 * 28)
+        assertEquals(queue.map { it.id }.sorted(), ordered.map { it.id }.sorted())
+        assertEquals(queue[0], ordered[0])
+    }
+
+    @Test fun progressiveBatchesProduceSameChainAsSinglePass() {
+        val queue = (1L..257L).map { song(it) }
+        val analyses = queue.associate { it.id to analysis(it.id, 100f + (it.id % 5) * 10f)
+            .copy(beatSections = emptyList(), vocalSections = emptyList()) }
+        val expected = AutomixQueueSelector.buildSmartQueue(queue, 0, { analyses[it] })
+        var actual = queue
+        var entry = 0L
+        var cursor = 0
+        while (cursor < queue.lastIndex) {
+            val count = minOf(if (cursor == 0) 1 else 8, queue.lastIndex - cursor)
+            actual = AutomixQueueSelector.buildSmartQueue(actual, cursor, { analyses[it] },
+                entryPositionMs = entry, maxLinks = count)
+            for (index in cursor until cursor + count) {
+                entry = TransitionPlanner.plan(analyses[actual[index].id]!!, analyses[actual[index + 1].id]!!,
+                    AutomixMode.AUTO_DJ, entryPositionMs = entry).cueInMs
+            }
+            cursor += count
+        }
+        assertEquals(expected.map { it.id }, actual.map { it.id })
+    }
+
+    @Test fun emittedMediaMovesReproduceQueueIncludingLockedBlocks() {
+        val queue = (1L..80L).map { song(it) }
+        val analyses = queue.associate { it.id to analysis(it.id, if (it.id % 3 == 0L) 170f else 120f) }
+        val deck = queue.toMutableList()
+        val ordered = AutomixQueueSelector.buildSmartQueue(queue, 3, { analyses[it] },
+            lockedNextForSongIds = setOf(8L, 9L, 10L), maxLinks = 8,
+            onMove = { from, to, count ->
+                val block = deck.subList(from, from + count).toList()
+                deck.subList(from, from + count).clear()
+                deck.addAll(to, block)
+            })
+        assertEquals(ordered.map { it.id }, deck.map { it.id })
+        assertEquals(queue.take(4), ordered.take(4))
+        val start = ordered.indexOfFirst { it.id == 8L }
+        assertEquals(listOf(8L, 9L, 10L, 11L), ordered.drop(start).take(4).map { it.id })
+    }
+
+    @Test fun cancellationStopsLargeQueueBeforeTraversingTail() {
+        val queue = (1L..10_000L).map { song(it) }
+        var reads = 0
+        try {
+            AutomixQueueSelector.buildSmartQueue(queue, 0, {
+                if (++reads == 50) throw java.util.concurrent.CancellationException("Stopped")
+                null
+            })
+            fail("Expected cancellation")
+        } catch (_: java.util.concurrent.CancellationException) {
+            assertEquals(50, reads)
+        }
+        assertEquals(queue, AutomixQueueSelector.buildSmartQueue(queue, 0, { null }, maxLinks = 0))
+    }
+
+    @Test fun tailTimelineReplacementPreservesBufferedNextAndExcludesUnchangedEdges() {
+        val before = (1L..2000L).map { song(it) }
+        val after = before.toMutableList().apply { add(100, removeAt(124)) }
+        val range = changedQueueRange(before, after, 99, 130)!!
+        assertEquals(100..124, range)
+        assertTrue(range.first > 1) // Upcoming item at index 1 keeps its existing buffer.
+        val deck = before.toMutableList()
+        deck.subList(range.first, range.last + 1).clear()
+        deck.addAll(range.first, after.subList(range.first, range.last + 1))
+        assertEquals(after, deck)
+        assertNull(changedQueueRange(before, before, 0, before.size))
+        assertNull(changedQueueRange(before, before, 0, 0))
+    }
+
 }

@@ -60,20 +60,26 @@ object AutomixQueueSelector {
                 candidateArtist != null && candidateArtist in recentArtists -> 0.07f
                 else -> 0f
             }
-            val plan = TransitionPlanner.plan(currentAnalysis, candidateAnalysis, mode, entryPositionMs = entryPositionMs)
-            val quality = plan.quality!!
-            val confidence = quality.confidencePercent / 100f
-            val planScore = quality.scorePercent / 100f * (0.65f + confidence * 0.35f)
-            val selectionScore = (rawScore * 0.4f + planScore * 0.6f - artistPenalty).coerceAtLeast(0.05f)
+            val selectionScore = rawScore * 0.4f - artistPenalty
             candidates += ScoredCandidate(idx, candidate, candidateAnalysis, rawScore, selectionScore)
         }
 
-        val chosen = if (candidates.isNotEmpty()) {
-            val maxSel = candidates.maxOf { it.selectionScore }
+        val plannedCandidates = candidates
+            .sortedWith(compareByDescending<ScoredCandidate> { it.selectionScore }.thenBy { it.song.id })
+            .take(6)
+            .map { candidate ->
+                val plan = TransitionPlanner.plan(currentAnalysis, candidate.analysis, mode, entryPositionMs = entryPositionMs)
+                val quality = plan.quality!!
+                val confidence = quality.confidencePercent / 100f
+                val planScore = quality.scorePercent / 100f * (0.65f + confidence * 0.35f)
+                candidate.copy(selectionScore = candidate.selectionScore + planScore * 0.6f)
+            }
+        val chosen = if (plannedCandidates.isNotEmpty()) {
+            val maxSel = plannedCandidates.maxOf { it.selectionScore }
             // Keep top candidates within 4.5% of the best score (up to 4 tracks) and pick
             // deterministically using the current song & queue context to prevent greedy loops
             // over the same "universal" tracks while keeping queue previews stable.
-            val topPool = candidates
+            val topPool = plannedCandidates
                 .filter { it.selectionScore >= maxSel - 0.045f }
                 .sortedWith(compareByDescending<ScoredCandidate> { it.selectionScore }.thenBy { it.song.id })
                 .take(4)
@@ -104,12 +110,15 @@ object AutomixQueueSelector {
     fun buildSmartQueue(
         queue: List<Song>, currentIndex: Int, analysisProvider: (Long) -> TrackAnalysis?,
         lockedNextForSongIds: Set<Long> = emptySet(), mode: AutomixMode = AutomixMode.AUTO_DJ,
-        entryPositionMs: Long = 0L
+        entryPositionMs: Long = 0L,
+        maxLinks: Int = Int.MAX_VALUE,
+        onMove: (fromIndex: Int, toIndex: Int, count: Int) -> Unit = { _, _, _ -> }
     ): List<Song> {
-        if (currentIndex !in queue.indices) return queue
+        if (currentIndex !in queue.indices || maxLinks <= 0) return queue
         val result = queue.toMutableList()
         var entry = entryPositionMs
-        for (index in currentIndex until result.lastIndex) {
+        val endExclusive = (currentIndex.toLong() + maxLinks).coerceAtMost(result.lastIndex.toLong()).toInt()
+        for (index in currentIndex until endExclusive) {
             val current = result[index]
             val analysis = analysisProvider(current.id)
             if (analysis != null && current.id !in lockedNextForSongIds) {
@@ -124,6 +133,7 @@ object AutomixQueueSelector {
                     val block = result.subList(start, end + 1).toList()
                     result.subList(start, end + 1).clear()
                     result.addAll(index + 1, block)
+                    onMove(start, index + 1, block.size)
                 }
             }
             val next = analysisProvider(result[index + 1].id)

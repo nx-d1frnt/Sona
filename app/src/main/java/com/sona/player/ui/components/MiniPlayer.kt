@@ -1,6 +1,11 @@
 package com.sona.player.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -24,17 +29,23 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.data.model.Song
 import com.sona.player.ui.theme.rememberArtworkPalette
 
@@ -46,7 +57,8 @@ fun MiniPlayer(
     onPlayPauseClick: () -> Unit,
     onNextClick: () -> Unit,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    automixState: AutomixTransitionState? = null
 ) {
     AnimatedVisibility(
         visible = song != null,
@@ -55,6 +67,15 @@ fun MiniPlayer(
         if (song == null) return@AnimatedVisibility
 
         val palette = rememberArtworkPalette(song.albumArtUri)
+        val targetSong = automixState?.let { it.transitionTargetSong ?: it.nextMatchedSong }
+        val targetPalette = rememberArtworkPalette(targetSong?.albumArtUri)
+
+        val progressMotion = rememberAutomixProgressMotion(
+            progress = progress,
+            primaryColor = palette.primaryAccent,
+            isTransitioning = automixState?.isTransitioning == true,
+            targetSongId = targetSong?.id
+        )
 
         Card(
             shape = RoundedCornerShape(24.dp),
@@ -140,14 +161,37 @@ fun MiniPlayer(
                     }
                 }
 
-                LinearProgressIndicator(
-                    progress = { progress.coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(3.dp),
-                    color = palette.primaryAccent,
-                    trackColor = palette.primaryContainer.copy(alpha = 0.5f)
+                val mixProgress by animateFloatAsState(
+                    targetValue = if (automixState?.isTransitioning == true) {
+                        automixState.transitionProgress.coerceIn(0f, 1f)
+                    } else 0f,
+                    animationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
+                    label = "MiniMixProgress"
                 )
+                val incomingColor = if (automixState?.isTransitioning == true && targetSong != null) targetPalette.primaryAccent else palette.primaryAccent
+                val startColor by animateColorAsState(
+                    targetValue = lerp(progressMotion.outgoingColor, incomingColor, mixProgress),
+                    animationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
+                    label = "MiniMixStart"
+                )
+                val endColor by animateColorAsState(
+                    targetValue = incomingColor,
+                    animationSpec = spring(dampingRatio = 1f, stiffness = Spring.StiffnessMediumLow),
+                    label = "MiniMixEnd"
+                )
+                Canvas(Modifier.fillMaxWidth().height(4.dp)) {
+                    val radius = CornerRadius(size.height / 2f)
+                    drawRoundRect(palette.primaryContainer.copy(alpha = 0.5f), cornerRadius = radius)
+                    val activeWidth = size.width * progressMotion.progress.value.coerceIn(0f, 1f)
+                    if (activeWidth > 0f) {
+                        drawRoundRect(
+                            brush = Brush.horizontalGradient(listOf(startColor, endColor), endX = activeWidth),
+                            topLeft = Offset.Zero,
+                            size = Size(activeWidth, size.height),
+                            cornerRadius = radius
+                        )
+                    }
+                }
             }
         }
     }
