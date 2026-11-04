@@ -108,6 +108,7 @@ class UserLibraryDatabaseHelper(context: Context) : SQLiteOpenHelper(
     override fun onConfigure(db: SQLiteDatabase) {
         super.onConfigure(db)
         db.setForeignKeyConstraintsEnabled(true)
+        db.enableWriteAheadLogging()
     }
 
     // --- Favorites ---

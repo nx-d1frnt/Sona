@@ -195,4 +195,34 @@ class AutomixEqAudioProcessorTest {
         assertTrue(kotlin.math.abs(process(processor, ShortArray(100) { 16000 }).last().toInt() - 8000) <= 2)
     }
 
+    @Test fun vinylBrakeDSPsSweepsLpfDownToLowFrequencies() {
+        val proc = processor(1)
+        proc.updateOutgoingEq(0.85f, AutomixTransitionTool.VINYL_BRAKE)
+        // High frequency 8 kHz tone should be heavily attenuated by steep LPF drop
+        val highFreq = ShortArray(4800) { (sin(2 * PI * 8000 * it / 48_000) * 16000).toInt().toShort() }
+        val output = process(proc, highFreq)
+        val maxAmp = output.takeLast(1000).maxOf { kotlin.math.abs(it.toInt()) }
+        assertTrue("8 kHz tone should be deeply filtered by vinyl brake LPF", maxAmp < 3000)
+    }
+
+    @Test fun vocalDuckingAttenuatesVocalPocketWhilePreservingSubBass() {
+        val procNormal = processor(1).apply { updateOutgoingEq(0.5f, AutomixTransitionTool.BASS_SWAP_DROP, vocalDucking = false) }
+        val procDucked = processor(1).apply { updateOutgoingEq(0.5f, AutomixTransitionTool.BASS_SWAP_DROP, vocalDucking = true) }
+
+        // Feed some frames to let filter states settle
+        val warmup = ShortArray(4800) { 0 }
+        process(procNormal, warmup)
+        process(procDucked, warmup)
+
+        // 1500 Hz tone represents human vocal core
+        val vocalSamples = ShortArray(4800) { (sin(2 * PI * 1500 * it / 48_000) * 16000).toInt().toShort() }
+        val outNormal = process(procNormal, vocalSamples)
+        val outDucked = process(procDucked, vocalSamples)
+
+        val rmsNormal = kotlin.math.sqrt(outNormal.takeLast(2000).map { it.toDouble() * it }.average())
+        val rmsDucked = kotlin.math.sqrt(outDucked.takeLast(2000).map { it.toDouble() * it }.average())
+
+        assertTrue("Vocal band RMS with ducking should be significantly lower than without ducking",
+            rmsDucked < rmsNormal * 0.70)
+    }
 }

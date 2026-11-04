@@ -13,7 +13,8 @@ internal data class TransitionPlan(
     val handoffFraction: Float = 0.5f,
     val outgoingGain: Float = 1f,
     val incomingGain: Float = 1f,
-    val quality: TransitionQuality? = null
+    val quality: TransitionQuality? = null,
+    val vocalDuckingActive: Boolean = false
 )
 
 /** One decision for queue previews and playback, including optional manual-skip position. */
@@ -87,7 +88,15 @@ internal object TransitionPlanner {
                 }
             }
         }
-        if (tool != AutomixTransitionTool.VOCAL_HANDOFF) {
+        if (tool == AutomixTransitionTool.VINYL_BRAKE) {
+            duration = ((period ?: 500f) * 6).toLong().coerceIn(3500L, 5000L)
+            handoff = 0.62f
+            cue = nearestBeat(to, baseIn)?.takeIf { it <= MusicalCueSelector.maxEntryCue(to, duration) } ?: baseIn
+            out = if (actualOutPositionMs == null) nearestBeat(from, baseOut)?.takeIf {
+                mode != AutomixMode.AUTO_DJ || resolved != AutomixMode.QUICK_MID_MIX ||
+                    MusicalCueSelector.isVocalPause(from, it)
+            } ?: baseOut else baseOut
+        } else if (tool != AutomixTransitionTool.VOCAL_HANDOFF) {
             val outVoice = MusicalCueSelector.vocalRisk(from, baseOut, baseOut + 2000L)
             val inVoice = MusicalCueSelector.vocalRisk(to, baseIn, baseIn + 2000L)
             // Only fall back to a short 1-2s BEAT_CUT when BPMs are genuinely incompatible (> 10% gap)
@@ -112,16 +121,21 @@ internal object TransitionPlanner {
                 duration = ((period ?: 500f) * 6).toLong().coerceIn(2500L, 4500L)
             }
         }
-        // Echo Out bridges grooves at natural speed. No Sonic parameter drain may synthesize
+        // Echo Out and Vinyl Brake bridge grooves at natural speed. No Sonic parameter drain may synthesize
         // an EOF tail before the real media item ends.
         cue = cue.coerceIn(0L, MusicalCueSelector.maxEntryCue(to, duration))
-        val finalRatios = if (tool == AutomixTransitionTool.ECHO_OUT) 1f to 1f
+        val finalRatios = if (tool == AutomixTransitionTool.ECHO_OUT || tool == AutomixTransitionTool.VINYL_BRAKE) 1f to 1f
             else MusicalCueSelector.tempoRatiosAt(from, to, out, cue)
+        val outVoiceRisk = MusicalCueSelector.vocalRisk(from, baseOut, baseOut + 2000L)
+        val inVoiceRisk = MusicalCueSelector.vocalRisk(to, baseIn, baseIn + 2000L)
+        val vocalDuckingActive = (outVoiceRisk != null && outVoiceRisk >= 0.28f) &&
+            (inVoiceRisk != null && inVoiceRisk >= 0.28f)
         val plan = TransitionPlan(tool, out, cue, duration,
             finalRatios.first, finalRatios.second,
             echoDelayMs = if (period != null) period * if (from.energy >= 0.8f) 0.5f else 1f else 320f,
             handoffFraction = handoff,
-            outgoingGain = LoudnessNormalizer.gain(from, out), incomingGain = LoudnessNormalizer.gain(to, cue))
+            outgoingGain = LoudnessNormalizer.gain(from, out), incomingGain = LoudnessNormalizer.gain(to, cue),
+            vocalDuckingActive = vocalDuckingActive)
         return plan.copy(quality = TransitionQualityEvaluator.evaluate(from, to, plan))
     }
 
@@ -155,9 +169,21 @@ internal object TransitionPlanner {
             position in it.startMs..it.endMs && it.beatsMs.size >= 6 }
         .maxByOrNull { it.confidence }
 
-    private fun nearestBeat(track: TrackAnalysis, position: Long): Long? =
-        rhythmSection(track, position)?.beatsMs
-            ?.filter { it >= position && it <= position + 750L }?.minOrNull()
+    private fun nearestBeat(track: TrackAnalysis, position: Long): Long? {
+        val section = rhythmSection(track, position) ?: return null
+        val candidates = section.beatsMs.filter { it >= position && it <= position + 750L }
+        if (candidates.isEmpty()) return null
+        val phrases = section.phraseBoundaries16Ms.toSet()
+        val downbeats = section.downbeatsMs.toSet()
+        return candidates.minByOrNull { b ->
+            val priority = when {
+                b in phrases -> 0
+                b in downbeats -> 1
+                else -> 2
+            }
+            priority * 10_000L + abs(b - position)
+        }
+    }
 }
 
 /** Pure gain envelopes, shared with the audio-engine regression tests. */
@@ -176,6 +202,20 @@ internal object TransitionEnvelopes {
             AutomixTransitionTool.ECHO_OUT -> 1f to sin(t * angle).toFloat() // dry/wet exit is inside DSP
             AutomixTransitionTool.BEAT_CUT, AutomixTransitionTool.SILKY_WARM_ISOLATOR ->
                 cos(t * angle).toFloat().coerceAtLeast(0f) to sin(t * angle).toFloat()
+            AutomixTransitionTool.VINYL_BRAKE -> {
+                val out = if (t < 0.62f) {
+                    1f - (t / 0.62f) * 0.12f
+                } else {
+                    val brakeFrac = ((t - 0.62f) / 0.38f).coerceIn(0f, 1f)
+                    0.88f * (1f - brakeFrac).pow(2)
+                }
+                val incoming = if (t < 0.60f) {
+                    (t / 0.60f) * 0.45f
+                } else {
+                    0.45f + ((t - 0.60f) / 0.40f) * 0.55f
+                }
+                out.coerceAtLeast(0f) to incoming.coerceIn(0f, 1f)
+            }
             AutomixTransitionTool.HIGH_PASS_RISER_SLAM -> {
                 val out = if (t < 0.48f) 1f - t / 0.48f * 0.15f else {
                     val tail = ((t - 0.48f) / 0.52f).coerceIn(0f, 1f)

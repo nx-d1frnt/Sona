@@ -7,6 +7,7 @@ import java.io.Closeable
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.FloatBuffer
 import java.nio.channels.FileChannel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -18,6 +19,9 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
     private val interpreter: Interpreter
     private val input: ByteBuffer
     private val output: ByteBuffer
+    private val inFloat: FloatBuffer
+    private val outFloat: FloatBuffer
+    private val scoresArray: FloatArray
     private val sampleCount: Int
     private val scoreCount: Int
     private val mutex = Mutex()
@@ -29,7 +33,8 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
             }
         }
         val options = Interpreter.Options().apply {
-            setNumThreads(2)
+            val cores = Runtime.getRuntime().availableProcessors()
+            setNumThreads(minOf(4, maxOf(2, cores / 2)))
         }
         interpreter = Interpreter(model, options)
         val inputTensor = interpreter.getInputTensor(0)
@@ -40,6 +45,9 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
         require(sampleCount == 15_600 && scoreCount == 521 && interpreter.outputTensorCount == 1)
         input = ByteBuffer.allocateDirect(sampleCount * 4).order(ByteOrder.nativeOrder())
         output = ByteBuffer.allocateDirect(scoreCount * 4).order(ByteOrder.nativeOrder())
+        inFloat = input.asFloatBuffer()
+        outFloat = output.asFloatBuffer()
+        scoresArray = FloatArray(scoreCount)
     }
 
     suspend fun analyze(window: AudioWindow): List<VocalSection> {
@@ -53,19 +61,19 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
             var offset = 0
             while (offset + sampleCount <= window.samples.size) {
                 currentCoroutineContext().ensureActive()
-                input.clear()
-                for (i in offset until offset + sampleCount) input.putFloat(window.samples[i])
-                input.rewind()
-                output.clear()
+                inFloat.clear()
+                inFloat.put(window.samples, offset, sampleCount)
+                input.position(0)
+                output.position(0)
                 interpreter.run(input, output)
-                output.rewind()
-                val scores = FloatArray(scoreCount) { output.float }
+                outFloat.position(0)
+                outFloat.get(scoresArray)
                 val isLast = offset + stride + sampleCount > window.samples.size
                 val sectionEndSample = if (isLast) window.samples.size else offset + stride
                 result += VocalSection(
                     window.startMs + offset * 1000L / 16_000,
                     window.startMs + sectionEndSample * 1000L / 16_000,
-                    vocalScore(scores)
+                    vocalScore(scoresArray)
                 )
                 offset += stride
             }
@@ -77,9 +85,19 @@ internal class YamnetVocalDetector(context: Context) : Closeable {
 
     companion object {
         // Fixed AudioSet indices in the bundled YAMNet class map; see assets/models/README.md.
+        private val VOCAL_INDICES = intArrayOf(0, 1, 2, 3, 5, 12, 24, 25, 26, 27, 28, 29, 30, 31, 32, 249, 250)
+
         internal fun vocalScore(scores: FloatArray): Float {
-            val indices = intArrayOf(0, 1, 2, 3, 5, 12, 24, 25, 26, 27, 28, 29, 30, 31, 32, 249, 250)
-            return indices.maxOf { scores.getOrElse(it) { 0f }.takeIf(Float::isFinite) ?: 0f }.coerceIn(0f, 1f)
+            var maxScore = 0f
+            for (idx in VOCAL_INDICES) {
+                if (idx in scores.indices) {
+                    val score = scores[idx]
+                    if (score.isFinite() && score > maxScore) {
+                        maxScore = score
+                    }
+                }
+            }
+            return maxScore.coerceIn(0f, 1f)
         }
     }
 }

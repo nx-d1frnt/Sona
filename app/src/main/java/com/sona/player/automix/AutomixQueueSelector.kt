@@ -231,6 +231,10 @@ object AutomixQueueSelector {
         val energyDelta = toAnalysis.energy - fromAnalysis.energy
 
         return when {
+            // 0. Vinyl Brake / Tape Stop when transitioning from high energy down to chill with wide tempo gap
+            fromAnalysis.energy >= 0.65f && toAnalysis.energy <= 0.48f && directDiff > 0.15f ->
+                AutomixTransitionTool.VINYL_BRAKE
+
             // 1. Half/Double-Time Harmonic Bridge when tracks are near 2x or 0.5x BPM
             halfDoubleDiff <= 0.06f && directDiff > 0.18f ->
                 AutomixTransitionTool.HALF_DOUBLE_TIME_BRIDGE

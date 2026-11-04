@@ -221,4 +221,36 @@ class TransitionPlannerTest {
         assertNotNull(match)
         assertEquals(3L, match!!.song.id)
     }
+
+    @Test fun vinylBrakeEnvelopesAndSelectionOnSteepEnergyDropWithWideTempoGap() {
+        val highEnergyOut = from().copy(energy = 0.78f, bpm = 130f)
+        val chillIn = to(95f).copy(energy = 0.38f, bpm = 95f)
+        val selectedTool = AutomixQueueSelector.selectOptimalTransitionTool(highEnergyOut, chillIn)
+        assertEquals(AutomixTransitionTool.VINYL_BRAKE, selectedTool)
+
+        val plan = TransitionPlanner.plan(highEnergyOut, chillIn, AutomixMode.CLASSIC_OUTRO)
+        assertEquals(AutomixTransitionTool.VINYL_BRAKE, plan.tool)
+        assertTrue(plan.durationMs in 3000L..5000L)
+
+        // Gain envelopes: outgoing remains high before t=0.62, then rapidly decelerates to 0
+        val (earlyOut, earlyIn) = TransitionEnvelopes.gains(AutomixTransitionTool.VINYL_BRAKE, 0.40f)
+        assertTrue(earlyOut > 0.85f)
+        assertTrue(earlyIn < 0.35f)
+
+        val (brakeOut, brakeIn) = TransitionEnvelopes.gains(AutomixTransitionTool.VINYL_BRAKE, 0.90f)
+        assertTrue(brakeOut < 0.15f)
+        assertTrue(brakeIn > 0.80f)
+    }
+
+    @Test fun vocalDuckingActivatesOnlyWhenBothTracksHaveVocalClash() {
+        val vocalOut = from().copy(vocalSections = listOf(VocalSection(270_000, 300_000, 0.85f)))
+        val vocalIn = to(120f).copy(vocalSections = listOf(VocalSection(0, 24_000, 0.85f)))
+        val instrumentalIn = to(120f).copy(vocalSections = listOf(VocalSection(0, 24_000, 0.05f)))
+
+        val clashingPlan = TransitionPlanner.plan(vocalOut, vocalIn, AutomixMode.CLASSIC_OUTRO)
+        assertTrue("Vocal ducking should be active when both tracks clash", clashingPlan.vocalDuckingActive)
+
+        val cleanPlan = TransitionPlanner.plan(vocalOut, instrumentalIn, AutomixMode.CLASSIC_OUTRO)
+        assertFalse("Vocal ducking should NOT be active when incoming is instrumental", cleanPlan.vocalDuckingActive)
+    }
 }

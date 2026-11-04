@@ -6,6 +6,7 @@ import kotlin.math.*
 internal object BeatTracker {
     private const val FFT_SIZE = 512
     private const val HOP = 160 // 10 ms at 16 kHz
+    private val HANN_WINDOW = DoubleArray(FFT_SIZE) { 0.5 - 0.5 * cos(2 * PI * it / (FFT_SIZE - 1)) }
 
     fun analyze(window: AudioWindow): BeatSection? {
         if (window.sampleRate != 16_000 || window.samples.size < 16_000 * 5) return null
@@ -89,8 +90,41 @@ internal object BeatTracker {
         }
         if (bestBeats.size < 6) return null
         val confidence = (bestQuality * min(1.0, correlation[bestLag] / 0.65)).toFloat().coerceIn(0f, 1f)
-        return BeatSection(window.startMs, window.endMs, (60_000 / periodMs).toFloat(), confidence,
-            bestBeats.distinct().map { window.startMs + it.roundToLong() })
+        val finalBeats = bestBeats.distinct()
+        val phase = detectDownbeatPhase(finalBeats, novelty)
+        return BeatSection(
+            window.startMs,
+            window.endMs,
+            (60_000 / periodMs).toFloat(),
+            confidence,
+            finalBeats.map { window.startMs + it.roundToLong() },
+            downbeatPhase = phase
+        )
+    }
+
+    private fun detectDownbeatPhase(beats: List<Double>, novelty: FloatArray): Int {
+        if (beats.size < 4) return 0
+        var bestPhase = 0
+        var maxScore = -1.0
+        for (phase in 0..3) {
+            var sum = 0.0
+            var count = 0
+            for (i in phase until beats.size step 4) {
+                val frame = (beats[i] / 10.0).roundToInt()
+                var peak = 0f
+                for (f in (frame - 2).coerceAtLeast(0)..(frame + 2).coerceAtMost(novelty.lastIndex)) {
+                    if (novelty[f] > peak) peak = novelty[f]
+                }
+                sum += peak
+                count++
+            }
+            val avg = if (count > 0) sum / count else 0.0
+            if (avg > maxScore) {
+                maxScore = avg
+                bestPhase = phase
+            }
+        }
+        return bestPhase
     }
 
     private fun spectralOnsets(samples: FloatArray): FloatArray {
@@ -99,10 +133,9 @@ internal object BeatTracker {
         val real = DoubleArray(FFT_SIZE)
         val imaginary = DoubleArray(FFT_SIZE)
         val previous = DoubleArray(FFT_SIZE / 2)
-        val hann = DoubleArray(FFT_SIZE) { 0.5 - 0.5 * cos(2 * PI * it / (FFT_SIZE - 1)) }
         for (frame in 0 until count) {
             for (i in 0 until FFT_SIZE) {
-                real[i] = samples[frame * HOP + i] * hann[i]
+                real[i] = samples[frame * HOP + i] * HANN_WINDOW[i]
                 imaginary[i] = 0.0
             }
             Fft.transform(real, imaginary)

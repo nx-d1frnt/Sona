@@ -1441,7 +1441,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             outgoingEq.configureEcho(plan.echoDelayMs)
             outgoingEq.setNormalizationGain(plan.outgoingGain)
             incomingEq.setNormalizationGain(plan.incomingGain, 0L)
-            outgoingEq.updateOutgoingEq(0f, selectedTool)
+            outgoingEq.updateOutgoingEq(0f, selectedTool, plan.vocalDuckingActive)
             incomingEq.updateIncomingEq(0f, selectedTool)
             // Keep one common tempo throughout the overlap. Changing Sonic parameters
             // every animation tick would repeatedly drain/flush the audio pipeline.
@@ -1471,6 +1471,7 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
             var hasSwappedActiveDeck = false
             var elapsedMs = 0L
             var lastTickMs = android.os.SystemClock.elapsedRealtime()
+            var lastOutgoingBrakeTempo = outTempoRatio
 
             while (true) {
                 if (!isActive) return@launch
@@ -1496,8 +1497,22 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
 
                 val activeUiTempo = if (t < 0.50f) outTempoRatio else inTempoRatio
 
+                // For vinyl brake, decelerate the outgoing deck in the spin-down phase (t >= 0.60)
+                if (selectedTool == AutomixTransitionTool.VINYL_BRAKE && outgoingDeck.isPlaying) {
+                    val brakeTempo = if (t < 0.60f) {
+                        outTempoRatio
+                    } else {
+                        val brakeFrac = ((t - 0.60f) / 0.40f).coerceIn(0f, 1f)
+                        (outTempoRatio * (1f - brakeFrac * 0.75f)).coerceAtLeast(0.25f)
+                    }
+                    if (kotlin.math.abs(brakeTempo - lastOutgoingBrakeTempo) >= 0.08f || (t >= 0.95f && lastOutgoingBrakeTempo > 0.30f)) {
+                        lastOutgoingBrakeTempo = brakeTempo
+                        outgoingDeck.playbackParameters = PlaybackParameters(brakeTempo, 1f)
+                    }
+                }
+
                 // EQ envelopes change continuously without reconfiguring tempo processing.
-                outgoingEq.updateOutgoingEq(t, selectedTool)
+                outgoingEq.updateOutgoingEq(t, selectedTool, plan.vocalDuckingActive)
                 incomingEq.updateIncomingEq(t, selectedTool)
 
                 val (outGain, inGain) = TransitionEnvelopes.gains(selectedTool, t, plan.handoffFraction)

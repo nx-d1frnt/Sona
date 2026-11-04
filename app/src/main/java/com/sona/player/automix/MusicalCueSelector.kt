@@ -71,14 +71,18 @@ internal object MusicalCueSelector {
     private fun choose(track: TrackAnalysis, baseMs: Long, lower: Long, upper: Long,
                        overlapMs: Long, outgoing: Boolean): Long {
         if (upper < lower || track.vocalSections.isEmpty() && track.beatSections.isEmpty()) return baseMs
-        val beats = track.beatSections.filter { it.confidence >= 0.65f }
-            .flatMap { it.beatsMs }.filter { it in lower..upper }.toSet()
+        val confidentSections = track.beatSections.filter { it.confidence >= 0.65f }
+        val beats = confidentSections.flatMap { it.beatsMs }.filter { it in lower..upper }.toSet()
+        val downbeats = confidentSections.flatMap { it.downbeatsMs }.filter { it in lower..upper }.toSet()
         val candidates = ((lower..upper step 500L).toList() + beats + baseMs).filter { it in lower..upper }
         return candidates.minByOrNull { cue ->
             val end = cue + (overlapMs * if (outgoing) 1.0 else 0.75).toLong()
             val risk = vocalRisk(track, cue, end) ?: 0.5f
+            val beatBonus = if (cue in beats) {
+                0.10f + if (risk < 0.25f && cue in downbeats) 0.04f else 0f
+            } else 0f
             // Preserve context: moving several seconds requires a meaningful reduction in vocal activity.
-            risk + abs(cue - baseMs) / 5000f * 0.15f - if (cue in beats) 0.10f else 0f
+            risk + abs(cue - baseMs) / 5000f * 0.15f - beatBonus
         } ?: baseMs
     }
 

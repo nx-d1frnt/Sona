@@ -81,6 +81,11 @@ enum class AutomixTransitionTool(
         displayName = "Warm 3-Band Isolator Morph",
         shortBadge = "3-Band Isolator",
         toolsSummary = "BPM Sync • Smooth 3-Band EQ Morph"
+    ),
+    VINYL_BRAKE(
+        displayName = "Vinyl Brake / Tape Stop",
+        shortBadge = "Tape Stop",
+        toolsSummary = "Turntable Deceleration • LPF Drop • Power Cut"
     )
 }
 
@@ -216,6 +221,23 @@ data class TrackAnalysis(
 
     val automixZoneFraction: Float
         get() = effectiveZoneFraction(AutomixMode.CLASSIC_OUTRO)
+
+    /** All detected downbeats across confident beat sections (every 4 beats / Bar 1). */
+    fun downbeats(): List<Long> =
+        beatSections.filter { it.confidence >= 0.45f }
+            .flatMap { it.downbeatsMs }
+            .distinct()
+            .sorted()
+
+    /** All detected 4-bar (16-beat) or 8-bar (32-beat) phrase boundaries across confident beat sections. */
+    fun phraseBoundaries(bars: Int = 4): List<Long> =
+        beatSections.filter { it.confidence >= 0.45f }
+            .flatMap { section ->
+                val step = (bars * 4).coerceAtLeast(4)
+                section.beatsMs.filterIndexed { index, _ -> (index % step) == (section.downbeatPhase % step) }
+            }
+            .distinct()
+            .sorted()
 }
 
 /**

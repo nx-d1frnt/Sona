@@ -70,6 +70,11 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_song_id ON $TABLE_NAME ($COL_SONG_ID)")
     }
 
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        db.enableWriteAheadLogging()
+    }
+
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             // v2: musical key. Existing rows get key_analyzed = 0 and are enriched lazily.
@@ -173,6 +178,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
                     put("end", section.endMs)
                     put("bpm", section.bpm)
                     put("confidence", section.confidence)
+                    put("downbeatPhase", section.downbeatPhase)
                     put("times", JSONArray(section.beatsMs))
                 })
             }
@@ -234,9 +240,11 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 if (!bpm.isFinite() || bpm <= 0 || !confidence.isFinite() || end <= start) null
                 else {
                     val times = obj.optJSONArray("times") ?: JSONArray()
+                    val downbeatPhase = obj.optInt("downbeatPhase", 0).coerceIn(0, 3)
                     BeatSection(
                         start, end, bpm, confidence.coerceIn(0f, 1f),
-                        (0 until times.length()).map { times.getLong(it) }.filter { it in start..end }.distinct().sorted()
+                        (0 until times.length()).map { times.getLong(it) }.filter { it in start..end }.distinct().sorted(),
+                        downbeatPhase
                     )
                 }
             }

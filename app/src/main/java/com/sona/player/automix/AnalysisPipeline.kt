@@ -24,4 +24,24 @@ internal object AnalysisPipeline {
             decoder.cancel()
         }
     }
+
+    suspend fun <O> processStream(
+        produce: suspend (suspend (O) -> Unit) -> Unit,
+        consume: suspend (O) -> Unit
+    ) = coroutineScope {
+        val channel = Channel<O>(Channel.RENDEZVOUS)
+        val producer = launch(Dispatchers.Default) {
+            try {
+                produce { item -> channel.send(item) }
+            } finally {
+                channel.close()
+            }
+        }
+        try {
+            withContext(Dispatchers.Default) { for (item in channel) consume(item) }
+        } finally {
+            channel.cancel()
+            producer.cancel()
+        }
+    }
 }

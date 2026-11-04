@@ -81,12 +81,13 @@ class AudioAnalysisEngine(private val context: Context) {
     // Only the passes that are missing (loudness and/or key) are computed from the decoded windows.
     private suspend fun enrichMissing(song: Song, existing: TrackAnalysis): TrackAnalysis {
         val duration = existing.durationMs
-        val windows = listOf(
-            windowDecoder.decode(song, 0L, minOf(24_000L, duration * 35 / 100)),
-            windowDecoder.decode(song, (duration * 0.48).toLong(), minOf(14_000L, duration / 4)),
-            windowDecoder.decode(song, (duration - minOf(38_000L, duration * 28 / 100)).coerceAtLeast(0L),
-                minOf(38_000L, duration * 28 / 100))
+        val ranges = listOf(
+            0L to minOf(24_000L, duration * 35 / 100),
+            (duration * 0.48).toLong() to minOf(14_000L, duration / 4),
+            (duration - minOf(38_000L, duration * 28 / 100)).coerceAtLeast(0L) to minOf(38_000L, duration * 28 / 100)
         )
+        val windows = mutableListOf<AudioWindow>()
+        windowDecoder.decodeWindows(song, ranges) { windows.add(it) }
         var result = existing
         if (!existing.loudnessAnalyzed) {
             result = result.copy(loudnessSections = windows.mapNotNull { LoudnessAnalyzer.analyze(it) }, loudnessAnalyzed = true)
@@ -114,9 +115,15 @@ class AudioAnalysisEngine(private val context: Context) {
         val outroWindowMs = (durationMs * 0.28f).toLong().coerceIn(18_000L, 38_000L)
             .coerceAtMost(durationMs / 2)
         val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
+        val windowRanges = listOf(
+            0L to introWindowMs,
+            coreStartMs to coreWindowMs,
+            outroStartMs to outroWindowMs
+        )
         val windows = mutableListOf<AudioWindow>()
         val beats = mutableListOf<BeatSection>()
         val vocals = mutableListOf<VocalSection>()
+        val loudnessSections = mutableListOf<LoudnessSection>()
         var decodeMs = 0L
         var beatMs = 0L
         var vocalMs = 0L
@@ -124,39 +131,47 @@ class AudioAnalysisEngine(private val context: Context) {
         val chroma = DoubleArray(12)
         var chromaFrames = 0
         var keyMs = 0L
-        AnalysisPipeline.process(listOf(0L to introWindowMs, coreStartMs to coreWindowMs,
-            outroStartMs to outroWindowMs), prepare = { (start, length) ->
-            val before = android.os.SystemClock.elapsedRealtime()
-            windowDecoder.decode(song, start, length).also {
-                decodeMs += android.os.SystemClock.elapsedRealtime() - before
-            }
-        }, consume = { window ->
-            windows += window
-            val beforeBeats = android.os.SystemClock.elapsedRealtime()
-            BeatTracker.analyze(window)?.let { beats += it }
-            beatMs += android.os.SystemClock.elapsedRealtime() - beforeBeats
-            val beforeKey = android.os.SystemClock.elapsedRealtime()
-            chromaFrames += KeyDetector.accumulate(window, chroma)
-            keyMs += android.os.SystemClock.elapsedRealtime() - beforeKey
-            val beforeVocals = android.os.SystemClock.elapsedRealtime()
-            if (classifierAvailable) {
-                try {
-                    val detector = vocalDetector ?: synchronized(this) {
-                        vocalDetector ?: YamnetVocalDetector(context).also { vocalDetector = it }
-                    }
-                    vocals += detector.analyze(window)
-                } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    classifierAvailable = false
-                    android.util.Log.w("SonaAnalysis", "Vocal classifier unavailable", failure)
-                } catch (failure: LinkageError) {
-                    classifierAvailable = false
-                    android.util.Log.w("SonaAnalysis", "Vocal runtime unavailable", failure)
+
+        AnalysisPipeline.processStream(
+            produce = { emit ->
+                val before = android.os.SystemClock.elapsedRealtime()
+                windowDecoder.decodeWindows(song, windowRanges) { window ->
+                    decodeMs += android.os.SystemClock.elapsedRealtime() - before
+                    emit(window)
                 }
+            },
+            consume = { window ->
+                windows += window
+                val beforeBeats = android.os.SystemClock.elapsedRealtime()
+                BeatTracker.analyze(window)?.let { beats += it }
+                beatMs += android.os.SystemClock.elapsedRealtime() - beforeBeats
+
+                val beforeKey = android.os.SystemClock.elapsedRealtime()
+                chromaFrames += KeyDetector.accumulate(window, chroma)
+                keyMs += android.os.SystemClock.elapsedRealtime() - beforeKey
+
+                LoudnessAnalyzer.analyze(window)?.let { loudnessSections += it }
+
+                val beforeVocals = android.os.SystemClock.elapsedRealtime()
+                if (classifierAvailable) {
+                    try {
+                        val detector = vocalDetector ?: synchronized(this) {
+                            vocalDetector ?: YamnetVocalDetector(context).also { vocalDetector = it }
+                        }
+                        vocals += detector.analyze(window)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        classifierAvailable = false
+                        android.util.Log.w("SonaAnalysis", "Vocal classifier unavailable", failure)
+                    } catch (failure: LinkageError) {
+                        classifierAvailable = false
+                        android.util.Log.w("SonaAnalysis", "Vocal runtime unavailable", failure)
+                    }
+                }
+                vocalMs += android.os.SystemClock.elapsedRealtime() - beforeVocals
             }
-            vocalMs += android.os.SystemClock.elapsedRealtime() - beforeVocals
-        })
+        )
         val intro = windows[0]
         val core = windows[1]
         val outro = windows[2]
@@ -236,7 +251,7 @@ class AudioAnalysisEngine(private val context: Context) {
             midMixConfidence = midPoint.confidence,
             beatSections = beats,
             vocalSections = vocals,
-            loudnessSections = windows.mapNotNull { LoudnessAnalyzer.analyze(it) },
+            loudnessSections = loudnessSections,
             loudnessAnalyzed = true,
             keyIndex = key?.index ?: -1,
             keyConfidence = key?.confidence ?: 0f,

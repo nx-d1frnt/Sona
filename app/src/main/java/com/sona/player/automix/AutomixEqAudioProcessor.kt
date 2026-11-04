@@ -42,6 +42,10 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
     @Volatile
     private var targetEchoMix: Float = 0f
 
+    // Target vocal band ducking (0.0f = off, up to 0.70f = ~11 dB cut in vocal presence 800-3500 Hz)
+    @Volatile
+    private var targetVocalDuck: Float = 0f
+
     @Volatile
     private var resetRequested = false
 
@@ -74,6 +78,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
     private var currentLpfAlpha: Float = 1f
     private var currentHpfMix: Float = 0f
     private var currentEchoMix: Float = 0f
+    private var currentVocalDuck: Float = 0f
 
     // 2-pole cascaded RC filter states per channel (Left = 0, Right = 1)
     private val lpfStage1 = FloatArray(2)
@@ -81,6 +86,8 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
     private val bassStage1 = FloatArray(2)
     private val bassStage2 = FloatArray(2)
     private val hpfStage1 = FloatArray(2)
+    private val vocalLow = FloatArray(2)
+    private val vocalHigh = FloatArray(2)
 
     // Sized on the audio thread for up to 1 second of tempo-synced delay at the actual rate.
     private var delayFrames = 16384
@@ -97,12 +104,21 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
      */
     fun updateOutgoingEq(
         progress: Float,
-        tool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP
+        tool: AutomixTransitionTool = AutomixTransitionTool.BASS_SWAP_DROP,
+        vocalDucking: Boolean = false
     ) {
         val t = progress.coerceIn(0f, 1f)
         targetDryMix = 1f
         targetEchoFeed = 1f
         echoOutActive = tool == AutomixTransitionTool.ECHO_OUT
+
+        targetVocalDuck = if (vocalDucking) {
+            when {
+                t < 0.15f -> (t / 0.15f) * 0.65f
+                t < 0.70f -> 0.65f
+                else -> 0.65f * ((1f - t) / 0.30f).coerceIn(0f, 1f)
+            }
+        } else 0f
 
         when (tool) {
             AutomixTransitionTool.VOCAL_HANDOFF, AutomixTransitionTool.BEAT_CUT -> {
@@ -215,6 +231,24 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
                 targetHighPassMix = 0f
                 targetEchoMix = if (t > 0.45f) 0.16f else 0f
             }
+
+            AutomixTransitionTool.VINYL_BRAKE -> {
+                // Outgoing track: Motor deceleration & steep LPF sweep down to 100 Hz in final brake phase
+                targetBassCut = when {
+                    t < 0.50f -> 0f
+                    t < 0.75f -> ((t - 0.50f) / 0.25f) * 0.85f
+                    else -> 0.85f
+                }
+                targetLpfCutoffHz = when {
+                    t < 0.55f -> 18000f
+                    else -> {
+                        val frac = ((t - 0.55f) / 0.45f).coerceIn(0f, 1f)
+                        (18000.0 * (120.0 / 18000.0).pow(frac.toDouble())).toFloat().coerceIn(120f, 18000f)
+                    }
+                }
+                targetHighPassMix = 0f
+                targetEchoMix = if (t > 0.60f) 0.18f * ((t - 0.60f) / 0.40f) else 0f
+            }
         }
 
         isDspActive = true
@@ -269,6 +303,16 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
                 targetLpfCutoffHz = if (t < 0.25f) 4500f + (t / 0.25f) * 14000f else 20000f
             }
 
+            AutomixTransitionTool.VINYL_BRAKE -> {
+                // Incoming track enters clean, bass cut eases in gently before brake point, full power on drop!
+                targetBassCut = when {
+                    t < 0.55f -> 0.75f * (1f - (t / 0.55f))
+                    else -> 0f
+                }
+                targetHighPassMix = 0f
+                targetLpfCutoffHz = 20000f
+            }
+
             else -> {
                 // Phase 1 (0.0 .. 0.44): Enters with 94% bass kill + High-Pass so kicks never clash
                 // Phase 2 (0.44 .. 0.54): DJ Bass Swap! Full bass drops in cleanly
@@ -299,6 +343,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
         targetLpfCutoffHz = 20000f
         targetHighPassMix = 0f
         targetEchoMix = 0f
+        targetVocalDuck = 0f
         targetDryMix = 1f
         targetEchoFeed = 1f
         echoOutActive = false
@@ -312,6 +357,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
         currentLpfAlpha = 1f
         currentHpfMix = 0f
         currentEchoMix = 0f
+        currentVocalDuck = 0f
         currentDryMix = 1f
         limiterGain = 1f
         echoTailPending = false
@@ -320,6 +366,8 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
         bassStage1[0] = 0f; bassStage1[1] = 0f
         bassStage2[0] = 0f; bassStage2[1] = 0f
         hpfStage1[0] = 0f; hpfStage1[1] = 0f
+        vocalLow[0] = 0f; vocalLow[1] = 0f
+        vocalHigh[0] = 0f; vocalHigh[1] = 0f
         echoLpL = 0f; echoLpR = 0f
         echoBufferL.fill(0f)
         echoBufferR.fill(0f)
@@ -350,6 +398,7 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
             currentLpfAlpha > 0.985f &&
             currentHpfMix < 0.005f &&
             currentEchoMix < 0.005f &&
+            currentVocalDuck < 0.005f && targetVocalDuck < 0.005f &&
             abs(normalization.gain - 1f) < 0.0001f && abs(currentNormalizationGain - 1f) < 0.0001f &&
             limiterGain > 0.9999f && targetDryMix > 0.9999f
         ) {
@@ -389,6 +438,12 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
             (wcLpf / (wcLpf + sampleRate)).coerceIn(0.02f, 1.0f)
         }
 
+        // 4. Vocal band crossover alphas (~800 Hz and ~3500 Hz)
+        val wcVocalLow = (2.0 * PI * 800.0).toFloat()
+        val vocalLowAlpha = (wcVocalLow / (wcVocalLow + sampleRate)).coerceIn(0.01f, 0.45f)
+        val wcVocalHigh = (2.0 * PI * 3500.0).toFloat()
+        val vocalHighAlpha = (wcVocalHigh / (wcVocalHigh + sampleRate)).coerceIn(0.05f, 0.85f)
+
         val delaySamples = (sampleRate * targetEchoDelayMs / 1000f).toInt().coerceIn(1, delayFrames - 1)
         val level = normalization
         if (level !== appliedNormalization) {
@@ -404,12 +459,14 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
         val targetCut = targetBassCut
         val targetHpf = targetHighPassMix
         val targetEcho = targetEchoMix
+        val targetDuck = targetVocalDuck
 
         for (frame in 0 until frameCount) {
             currentBassCut += (targetCut - currentBassCut) * 0.004f
             currentLpfAlpha += (targetAlpha - currentLpfAlpha) * 0.004f
             currentHpfMix += (targetHpf - currentHpfMix) * 0.004f
             currentEchoMix += (targetEcho - currentEchoMix) * 0.004f
+            currentVocalDuck += (targetDuck - currentVocalDuck) * 0.004f
             currentDryMix += (dryTarget - currentDryMix) * 0.004f
             if (normalizationFramesRemaining > 0L) {
                 currentNormalizationGain += normalizationStep
@@ -446,8 +503,15 @@ class AutomixEqAudioProcessor : BaseAudioProcessor() {
                 val subBass = bassStage2[ch] + bassAlpha * (b1 - bassStage2[ch])
                 bassStage2[ch] = subBass
 
-                // Subtract isolated bass according to DJ Bass Swap curve
-                var y = lp2 - (currentBassCut * subBass)
+                // Stage Vocal: Smart Vocal Anti-Clash Ducking (~800 Hz .. 3500 Hz presence pocket)
+                val vl = vocalLow[ch] + vocalLowAlpha * (lp2 - vocalLow[ch])
+                vocalLow[ch] = vl
+                val vh = vocalHigh[ch] + vocalHighAlpha * (lp2 - vocalHigh[ch])
+                vocalHigh[ch] = vh
+                val vocalBand = vh - vl
+
+                // Subtract isolated bass according to DJ Bass Swap curve and duck vocal presence
+                var y = lp2 - (currentBassCut * subBass) - (currentVocalDuck * vocalBand)
 
                 // Stage C: High-Pass Filter (for incoming entry or outgoing Tension Riser)
                 val hpLp = hpfStage1[ch] + hpfAlpha * (y - hpfStage1[ch])

@@ -44,4 +44,24 @@ class AnalysisPipelineTest {
             assertEquals("decode", expected.message)
         }
     }
+
+    @Test fun processStreamDeliversInOrderAndOverlaps() = runBlocking {
+        withTimeout(5000) {
+            val secondPrepared = CompletableDeferred<Unit>()
+            val consumed = mutableListOf<Int>()
+            AnalysisPipeline.processStream<Int>(
+                produce = { emit ->
+                    emit(1)
+                    secondPrepared.complete(Unit)
+                    emit(2)
+                    emit(3)
+                },
+                consume = { item ->
+                    if (item == 1) secondPrepared.await()
+                    consumed += item
+                }
+            )
+            assertEquals(listOf(1, 2, 3), consumed)
+        }
+    }
 }

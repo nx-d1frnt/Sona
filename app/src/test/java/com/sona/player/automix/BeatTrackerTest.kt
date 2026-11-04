@@ -40,4 +40,29 @@ class BeatTrackerTest {
     @Test fun shortAudioRemainsUnknown() {
         assertNull(BeatTracker.analyze(AudioWindow(0, FloatArray(16_000))))
     }
+
+    @Test fun detectsDownbeatAndExtractsPhraseBoundaries() {
+        val bpm = 120.0
+        val seconds = 20
+        val samples = FloatArray(seconds * 16_000)
+        var beat = 0.2
+        var beatIndex = 0
+        while (beat < seconds - 0.2) {
+            val start = (beat * 16_000).roundToInt()
+            // Accent downbeats (beatIndex % 4 == 0) with 2x kick amplitude
+            val amp = if (beatIndex % 4 == 0) 1.0 else 0.4
+            for (i in 0 until 800) {
+                samples[start + i] += (sin(2 * PI * 80 * i / 16_000) * exp(-i / 160.0) * amp).toFloat()
+            }
+            beatIndex++
+            beat += 60.0 / bpm
+        }
+        val section = requireNotNull(BeatTracker.analyze(AudioWindow(0L, samples)))
+        assertTrue("Expected downbeat phase in 0..3", section.downbeatPhase in 0..3)
+        assertTrue("Downbeats must not be empty", section.downbeatsMs.isNotEmpty())
+        assertTrue("Phrase boundaries must not be empty", section.phraseBoundaries16Ms.isNotEmpty())
+        // Downbeats must be spaced every 4 beats (~2000 ms at 120 BPM)
+        val downbeatIntervals = section.downbeatsMs.zipWithNext { a, b -> b - a }
+        assertTrue(downbeatIntervals.all { abs(it - 2000L) <= 100L })
+    }
 }
