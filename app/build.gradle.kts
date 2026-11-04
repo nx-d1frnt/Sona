@@ -87,5 +87,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.guava)
 
+    // DataStore Preferences
+    implementation(libs.androidx.datastore.preferences)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
 }

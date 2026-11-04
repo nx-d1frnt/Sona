@@ -96,6 +96,15 @@ class SmartQueueQualityTest {
         assertEquals(queue, AutomixQueueSelector.buildSmartQueue(queue, -1, { analyses[it] }))
         assertEquals(queue, AutomixQueueSelector.buildSmartQueue(queue, 0, { null }))
     }
+    @Test fun compatibilityScoreReusesBpmAndProducesIdenticalResults() {
+        val a = analysis(1, 124f)
+        val b = analysis(2, 126f)
+        val defaultScore = AutomixQueueSelector.computeCompatibilityScore(a, b)
+        val precomputedBpm = AutomixQueueSelector.localBpm(a, a.mixOutMs)
+        val optimizedScore = AutomixQueueSelector.computeCompatibilityScore(a, b, precomputedBpm)
+        assertEquals(defaultScore, optimizedScore, 0.0001f)
+    }
+
     @Test fun firstBatchCostIsBoundedWithTenThousandTracks() {
         val queue = (1L..10_000L).map { song(it) }
         val analyses = queue.associate { it.id to analysis(it.id).copy(beatSections = emptyList(), vocalSections = emptyList()) }

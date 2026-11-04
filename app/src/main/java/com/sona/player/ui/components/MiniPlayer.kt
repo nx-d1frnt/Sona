@@ -82,7 +82,7 @@ fun MiniPlayer(
             colors = CardDefaults.cardColors(
                 containerColor = palette.surfaceContainerTint
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp)

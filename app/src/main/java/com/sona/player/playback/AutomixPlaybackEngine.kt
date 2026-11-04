@@ -906,6 +906,8 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                 _playerState.value = _playerState.value.copy(
                     automix = _playerState.value.automix.copy(currentAnalysis = currentAnalysis))
                 refreshAnalyzedQueue(currentIndex)
+                var analyzedCount = 0
+                val nextCandidateId = playlist.getOrNull(currentIndex + 1)?.id
                 for (candidate in candidates) {
                     if (!isActive || !stillCurrent()) return@launch
                     if (!analysisEngine.needsAnalysis(candidate.id)) continue
@@ -913,8 +915,15 @@ class AutomixPlaybackEngine private constructor(private val context: Context) {
                     if (playlist.none { it.id == candidate.id }) continue
                     analysisEngine.analyzeSong(candidate)
                     if (!stillCurrent()) return@launch
-                    refreshAnalyzedQueue(currentIndex, candidate.id)
-                    delay(200)
+                    analyzedCount++
+                    val isImmediateNext = candidate.id == nextCandidateId || candidate.id == playlist.getOrNull(currentIndex + 1)?.id
+                    if (isImmediateNext || analyzedCount % 4 == 0) {
+                        refreshAnalyzedQueue(currentIndex, candidate.id)
+                    }
+                    delay(if (isImmediateNext) 100 else 150)
+                }
+                if (analyzedCount % 4 != 0 && stillCurrent()) {
+                    refreshAnalyzedQueue(currentIndex)
                 }
             } finally {
                 if (stillCurrent() && analysisJob == coroutineContext[Job]) _playerState.value = _playerState.value.copy(

@@ -21,7 +21,7 @@ internal data class TransitionPlan(
 internal object TransitionPlanner {
     private data class Key(val fromId: Long, val toId: Long, val mode: AutomixMode, val entryPositionMs: Long)
     private data class Cached(val from: TrackAnalysis, val to: TrackAnalysis, val plan: TransitionPlan)
-    private val previews = java.util.LinkedHashMap<Key, Cached>(32, 0.75f, true)
+    private val previews = java.util.LinkedHashMap<Key, Cached>(64, 0.75f, true)
 
     fun plan(from: TrackAnalysis, to: TrackAnalysis, mode: AutomixMode,
              customDurationMs: Long? = null, actualOutPositionMs: Long? = null, entryPositionMs: Long = 0L): TransitionPlan {
@@ -35,7 +35,7 @@ internal object TransitionPlanner {
         val result = computePlan(from, to, mode, entryPositionMs = entryPositionMs)
         synchronized(previews) {
             previews[key] = Cached(from, to, result)
-            if (previews.size > 128) previews.remove(previews.keys.first())
+            if (previews.size > 1024) previews.remove(previews.keys.first())
         }
         return result
     }

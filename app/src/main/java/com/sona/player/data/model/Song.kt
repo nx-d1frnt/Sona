@@ -13,7 +13,8 @@ data class Song(
     val trackNumber: Int = 0,
     val year: Int = 0,
     val size: Long = 0L,
-    val dateAdded: Long = 0L
+    val dateAdded: Long = 0L,
+    val filePath: String = ""
 ) {
     val formattedDuration: String
         get() {

@@ -33,9 +33,12 @@ object AutomixQueueSelector {
     ): MatchResult? {
         if (currentIndex < 0 || currentIndex + 1 >= queue.size) return null
 
-        val recentArtists = queue.subList((currentIndex - 2).coerceAtLeast(0), currentIndex + 1)
-            .mapNotNull { normalizeArtist(it.artist) }
+        val recentArtists = HashSet<String>(3)
+        for (i in (currentIndex - 2).coerceAtLeast(0)..currentIndex) {
+            normalizeArtist(queue.getOrNull(i)?.artist)?.let { recentArtists.add(it) }
+        }
         val currentArtist = normalizeArtist(currentSong.artist)
+        val currentBpm = localBpm(currentAnalysis, currentAnalysis.mixOutMs)
 
         data class ScoredCandidate(
             val index: Int,
@@ -53,7 +56,7 @@ object AutomixQueueSelector {
             if (candidate.id == currentSong.id || !canSelectCandidate(idx)) continue
 
             val candidateAnalysis = analysisProvider(candidate.id) ?: continue
-            val rawScore = computeCompatibilityScore(currentAnalysis, candidateAnalysis)
+            val rawScore = computeCompatibilityScore(currentAnalysis, candidateAnalysis, currentBpm)
             val candidateArtist = normalizeArtist(candidate.artist)
             val artistPenalty = when {
                 candidateArtist != null && candidateArtist == currentArtist -> 0.14f
@@ -156,22 +159,41 @@ object AutomixQueueSelector {
      * to the nearest confident beat section and finally the whole-track estimate.
      */
     internal fun localBpm(track: TrackAnalysis, positionMs: Long): Float {
-        val valid = track.beatSections.filter { it.bpm.isFinite() && it.bpm > 0f }
-        valid.filter { it.confidence >= 0.45f && positionMs in it.startMs..it.endMs }
-            .maxByOrNull { it.confidence }?.let { return it.bpm }
-        valid.filter { it.confidence >= 0.65f }
-            .map { it to minOf(abs(positionMs - it.startMs), abs(positionMs - it.endMs)) }
-            .filter { it.second <= 15_000L }
-            .minByOrNull { it.second }?.let { return it.first.bpm }
-        return track.bpm
+        var bestInsideBpm: Float? = null
+        var bestInsideConf = -1f
+        var bestNearBpm: Float? = null
+        var minDistance = Long.MAX_VALUE
+
+        for (section in track.beatSections) {
+            val bpm = section.bpm
+            if (!bpm.isFinite() || bpm <= 0f) continue
+            val conf = section.confidence
+            if (conf >= 0.45f && positionMs in section.startMs..section.endMs) {
+                if (conf > bestInsideConf) {
+                    bestInsideConf = conf
+                    bestInsideBpm = bpm
+                }
+            } else if (conf >= 0.65f) {
+                val dist = minOf(abs(positionMs - section.startMs), abs(positionMs - section.endMs))
+                if (dist <= 15_000L && dist < minDistance) {
+                    minDistance = dist
+                    bestNearBpm = bpm
+                }
+            }
+        }
+        return bestInsideBpm ?: bestNearBpm ?: track.bpm
     }
 
     private const val TEMPO_WEIGHT = 0.58f
     private const val ENERGY_WEIGHT = 0.24f
     private const val KEY_WEIGHT = 0.18f
 
-    fun computeCompatibilityScore(current: TrackAnalysis, candidate: TrackAnalysis): Float {
-        val bpmA = localBpm(current, current.mixOutMs)
+    fun computeCompatibilityScore(
+        current: TrackAnalysis,
+        candidate: TrackAnalysis,
+        precomputedBpmA: Float? = null
+    ): Float {
+        val bpmA = precomputedBpmA ?: localBpm(current, current.mixOutMs)
         val bpmB = localBpm(candidate, candidate.cueInMs)
         if (!bpmA.isFinite() || bpmA <= 0f || !bpmB.isFinite() || bpmB <= 0f) return 0.3f
 

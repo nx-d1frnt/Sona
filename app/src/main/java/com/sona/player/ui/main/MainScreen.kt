@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -45,6 +47,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -63,6 +67,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -84,6 +89,7 @@ import com.sona.player.ui.components.PlaylistViewTarget
 import com.sona.player.ui.components.PlaylistsTabScreen
 import com.sona.player.ui.components.TrackDetailsDialog
 import com.sona.player.ui.components.TrackOptionsMenuSheet
+import com.sona.player.ui.settings.SettingsScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +99,9 @@ fun MainScreen(
     onDeleteSong: (Song) -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val useNavRail = configuration.screenWidthDp >= 600
+
     val uiState by viewModel.uiState.collectAsState()
     val playerState by viewModel.playerState.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
@@ -112,6 +121,8 @@ fun MainScreen(
     val automixSets by viewModel.automixVibeSets.collectAsState()
     val albums by viewModel.albums.collectAsState()
     val artists by viewModel.artists.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val rawSongs by viewModel.rawSongs.collectAsState()
 
     // Dialog & Options states
     val trackForOptions by viewModel.trackForOptions.collectAsState()
@@ -140,9 +151,10 @@ fun MainScreen(
         context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.share_track_title)))
     }
 
-    BackHandler(enabled = isNowPlayingExpanded || playlistViewTarget !is PlaylistViewTarget.Root || artistAlbumViewTarget !is ArtistAlbumViewTarget.Root || selectedTab != MainNavTab.HOME) {
+    BackHandler(enabled = isNowPlayingExpanded || settingsOpen || playlistViewTarget !is PlaylistViewTarget.Root || artistAlbumViewTarget !is ArtistAlbumViewTarget.Root || selectedTab != MainNavTab.HOME) {
         when {
             isNowPlayingExpanded -> isNowPlayingExpanded = false
+            settingsOpen -> settingsOpen = false
             selectedTab == MainNavTab.PLAYLISTS && playlistViewTarget !is PlaylistViewTarget.Root -> {
                 viewModel.closePlaylistSubView()
             }
@@ -157,55 +169,57 @@ fun MainScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                actions = {
-                    if (selectedTab == MainNavTab.TRACKS) {
-                        Box {
-                            IconButton(onClick = { sortMenuOpen = true }) {
-                                Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = stringResource(R.string.action_sort))
-                            }
+            if (!settingsOpen) {
+                TopAppBar(
+                    title = {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    },
+                    actions = {
+                        if (selectedTab == MainNavTab.TRACKS) {
+                            Box {
+                                IconButton(onClick = { sortMenuOpen = true }) {
+                                    Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = stringResource(R.string.action_sort))
+                                }
 
-                            DropdownMenu(
-                                expanded = sortMenuOpen,
-                                onDismissRequest = { sortMenuOpen = false }
-                            ) {
-                                SortOrder.values().forEach { order ->
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(order.displayNameRes)) },
-                                        trailingIcon = {
-                                            if (order == sortOrder) {
-                                                Icon(
-                                                    imageVector = Icons.Rounded.Check,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.primary
-                                                )
+                                DropdownMenu(
+                                    expanded = sortMenuOpen,
+                                    onDismissRequest = { sortMenuOpen = false }
+                                ) {
+                                    SortOrder.values().forEach { order ->
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(order.displayNameRes)) },
+                                            trailingIcon = {
+                                                if (order == sortOrder) {
+                                                    Icon(
+                                                        imageVector = Icons.Rounded.Check,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.primary
+                                                    )
+                                                }
+                                            },
+                                            onClick = {
+                                                viewModel.setSortOrder(order)
+                                                sortMenuOpen = false
                                             }
-                                        },
-                                        onClick = {
-                                            viewModel.setSortOrder(order)
-                                            sortMenuOpen = false
-                                        }
-                                    )
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    IconButton(onClick = { settingsOpen = true }) {
-                        Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.action_settings))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                        IconButton(onClick = { settingsOpen = true }) {
+                            Icon(Icons.Rounded.Settings, contentDescription = stringResource(R.string.action_settings))
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
             Column(modifier = Modifier.fillMaxWidth()) {
@@ -225,29 +239,70 @@ fun MainScreen(
                     onClick = { isNowPlayingExpanded = true }
                 )
 
-                NavigationBar(
+                if (!settingsOpen && !useNavRail) {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        NavigationBarItem(
+                            selected = selectedTab == MainNavTab.HOME,
+                            onClick = { viewModel.selectTab(MainNavTab.HOME) },
+                            icon = { Icon(Icons.Rounded.Home, contentDescription = stringResource(R.string.tab_home)) },
+                            label = { Text(stringResource(R.string.tab_home)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == MainNavTab.TRACKS,
+                            onClick = { viewModel.selectTab(MainNavTab.TRACKS) },
+                            icon = { Icon(Icons.Rounded.MusicNote, contentDescription = stringResource(R.string.tab_tracks)) },
+                            label = { Text(stringResource(R.string.tab_tracks)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == MainNavTab.PLAYLISTS,
+                            onClick = { viewModel.selectTab(MainNavTab.PLAYLISTS) },
+                            icon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = stringResource(R.string.tab_playlists)) },
+                            label = { Text(stringResource(R.string.tab_playlists)) }
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == MainNavTab.ARTISTS_ALBUMS,
+                            onClick = { viewModel.selectTab(MainNavTab.ARTISTS_ALBUMS) },
+                            icon = { Icon(Icons.Rounded.Album, contentDescription = stringResource(R.string.tab_albums)) },
+                            label = { Text(stringResource(R.string.tab_albums)) }
+                        )
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            if (useNavRail && !settingsOpen) {
+                NavigationRail(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxHeight()
                 ) {
-                    NavigationBarItem(
+                    Spacer(modifier = Modifier.height(12.dp))
+                    NavigationRailItem(
                         selected = selectedTab == MainNavTab.HOME,
                         onClick = { viewModel.selectTab(MainNavTab.HOME) },
                         icon = { Icon(Icons.Rounded.Home, contentDescription = stringResource(R.string.tab_home)) },
                         label = { Text(stringResource(R.string.tab_home)) }
                     )
-                    NavigationBarItem(
+                    NavigationRailItem(
                         selected = selectedTab == MainNavTab.TRACKS,
                         onClick = { viewModel.selectTab(MainNavTab.TRACKS) },
                         icon = { Icon(Icons.Rounded.MusicNote, contentDescription = stringResource(R.string.tab_tracks)) },
                         label = { Text(stringResource(R.string.tab_tracks)) }
                     )
-                    NavigationBarItem(
+                    NavigationRailItem(
                         selected = selectedTab == MainNavTab.PLAYLISTS,
                         onClick = { viewModel.selectTab(MainNavTab.PLAYLISTS) },
                         icon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = stringResource(R.string.tab_playlists)) },
                         label = { Text(stringResource(R.string.tab_playlists)) }
                     )
-                    NavigationBarItem(
+                    NavigationRailItem(
                         selected = selectedTab == MainNavTab.ARTISTS_ALBUMS,
                         onClick = { viewModel.selectTab(MainNavTab.ARTISTS_ALBUMS) },
                         icon = { Icon(Icons.Rounded.Album, contentDescription = stringResource(R.string.tab_albums)) },
@@ -255,14 +310,40 @@ fun MainScreen(
                     )
                 }
             }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (selectedTab) {
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .weight(1f)
+            ) {
+            if (settingsOpen) {
+                SettingsScreen(
+                    settings = settings,
+                    allSongs = rawSongs,
+                    analysisState = analysis,
+                    canAnalyze = canAnalyze,
+                    onClose = { settingsOpen = false },
+                    onUpdateTransitionDuration = { viewModel.updateTransitionDuration(it) },
+                    onUpdateHarmonicMixingStrict = { viewModel.updateHarmonicMixingStrict(it) },
+                    onUpdateAvoidVocalClash = { viewModel.updateAvoidVocalClash(it) },
+                    onUpdateEnergyMatching = { viewModel.updateEnergyMatching(it) },
+                    onToggleFolderBlacklist = { path, blacklisted -> viewModel.toggleFolderBlacklist(path, blacklisted) },
+                    onUpdateArtistSeparators = { viewModel.updateArtistSeparators(it) },
+                    onUpdateGaplessPlayback = { viewModel.updateGaplessPlayback(it) },
+                    onUpdateAudioFocusDucking = { viewModel.updateAudioFocusDucking(it) },
+                    onUpdatePauseOnHeadsetDisconnect = { viewModel.updatePauseOnHeadsetDisconnect(it) },
+                    onUpdateThemeMode = { viewModel.updateThemeMode(it) },
+                    onUpdateUseDynamicMonet = { viewModel.updateUseDynamicMonet(it) },
+                    onUpdateUseArtworkPalette = { viewModel.updateUseArtworkPalette(it) },
+                    onUpdateExpressiveAnimations = { viewModel.updateExpressiveAnimations(it) },
+                    onResetSettings = { viewModel.resetSettings() },
+                    onStartAnalysis = { force -> viewModel.startLibraryAnalysis(force) },
+                    onCancelAnalysis = { viewModel.cancelLibraryAnalysis() },
+                    context = context,
+                    notificationPermissionLauncher = notificationPermission
+                )
+            } else {
+                when (selectedTab) {
                 MainNavTab.HOME -> {
                     HomeScreen(
                         allSongs = (uiState as? LibraryUiState.Success)?.songs ?: viewModel.rawSongs.collectAsState().value,
@@ -307,10 +388,10 @@ fun MainScreen(
                                     }
                                 }
                             },
-                            shape = RoundedCornerShape(20.dp),
+                            shape = CircleShape,
                             colors = TextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                                 focusedIndicatorColor = Color.Transparent,
                                 unfocusedIndicatorColor = Color.Transparent
                             ),
@@ -439,6 +520,8 @@ fun MainScreen(
             }
         }
     }
+}
+}
 
     // Modal Bottom Sheet: Track Options
     trackForOptions?.let { song ->
@@ -497,67 +580,6 @@ fun MainScreen(
                 viewModel.closeDeleteTrack()
             },
             onDismiss = { viewModel.closeDeleteTrack() }
-        )
-    }
-
-    // Settings Dialog
-    if (settingsOpen) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { settingsOpen = false },
-            title = { Text(stringResource(R.string.settings_automix_title)) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(stringResource(R.string.settings_library_analysis_title), style = MaterialTheme.typography.titleMedium)
-                    Text(stringResource(R.string.settings_library_analysis_description))
-                    Text(stringResource(R.string.settings_library_analysis_background_hint),
-                        style = MaterialTheme.typography.bodySmall)
-                    if (!analysis.running) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            androidx.compose.material3.Checkbox(
-                                checked = forceAnalysis,
-                                onCheckedChange = { forceAnalysis = it }
-                            )
-                            Text(stringResource(R.string.settings_force_analysis_checkbox), modifier = Modifier
-                                .weight(1f).clickable { forceAnalysis = !forceAnalysis })
-                        }
-                        if (forceAnalysis) Text(stringResource(R.string.settings_force_analysis_warning),
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                    if (analysis.message.isNotEmpty()) Text(analysis.message)
-                    if (analysis.total > 0) {
-                        Text(when {
-                            analysis.running && analysis.waitingForPlayback -> stringResource(R.string.analysis_waiting_for_playback)
-                            analysis.running -> stringResource(R.string.analysis_in_progress, analysis.title)
-                            analysis.cancelled -> stringResource(R.string.analysis_cancelled)
-                            else -> stringResource(R.string.analysis_completed)
-                        })
-                        androidx.compose.material3.LinearProgressIndicator(
-                            progress = { analysis.completed.toFloat() / analysis.total },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Text(stringResource(R.string.analysis_progress_count, analysis.completed, analysis.total))
-                    }
-                    Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                        if (analysis.running) {
-                            Button(onClick = { viewModel.cancelLibraryAnalysis() }) { Text(stringResource(R.string.analysis_stop)) }
-                        }
-                        Button(onClick = {
-                            if (android.os.Build.VERSION.SDK_INT >= 33 &&
-                                androidx.core.content.ContextCompat.checkSelfPermission(context,
-                                    android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                                notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-                            } else viewModel.startLibraryAnalysis(forceAnalysis)
-                        }, enabled = canAnalyze) {
-                            Text(if (forceAnalysis) stringResource(R.string.analysis_recalculate_all) else stringResource(R.string.analysis_start))
-                        }
-                        if (!canAnalyze) Text(stringResource(R.string.analysis_need_library_access))
-                    }
-                }
-            },
-            confirmButton = { androidx.compose.material3.TextButton(onClick = { settingsOpen = false }) { Text(stringResource(R.string.action_close)) } }
         )
     }
 

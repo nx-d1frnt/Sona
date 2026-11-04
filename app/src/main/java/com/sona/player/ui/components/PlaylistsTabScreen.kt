@@ -126,7 +126,7 @@ fun PlaylistsTabScreen(
                 title = stringResource(R.string.smart_playlist_favorites),
                 subtitle = stringResource(R.string.smart_playlist_favorites_subtitle, currentView.songs.size),
                 icon = Icons.Rounded.Favorite,
-                iconColor = MaterialTheme.colorScheme.error,
+                iconColor = MaterialTheme.colorScheme.tertiary,
                 songs = currentView.songs,
                 currentPlayingSongId = currentPlayingSongId,
                 isPlaying = isPlaying,
@@ -191,10 +191,10 @@ fun PlaylistsTabScreen(
         is PlaylistViewTarget.AutomixSet -> {
             val vibe = currentView.vibe
             val (icon, iconColor) = when (vibe) {
-                AutomixVibe.HIGH_ENERGY -> Icons.Rounded.ElectricBolt to Color(0xFFFF7043)
-                AutomixVibe.CHILL -> Icons.Rounded.Spa to Color(0xFF26A69A)
-                AutomixVibe.INSTRUMENTAL -> Icons.Rounded.GraphicEq to Color(0xFFAB47BC)
-                AutomixVibe.NIGHT_DRIVE -> Icons.Rounded.Nightlife to Color(0xFF42A5F5)
+                AutomixVibe.HIGH_ENERGY -> Icons.Rounded.ElectricBolt to MaterialTheme.colorScheme.tertiary
+                AutomixVibe.CHILL -> Icons.Rounded.Spa to MaterialTheme.colorScheme.secondary
+                AutomixVibe.INSTRUMENTAL -> Icons.Rounded.GraphicEq to MaterialTheme.colorScheme.primary
+                AutomixVibe.NIGHT_DRIVE -> Icons.Rounded.Nightlife to MaterialTheme.colorScheme.primary
             }
             PlaylistDetailView(
                 title = stringResource(vibe.titleRes),
@@ -252,8 +252,8 @@ private fun PlaylistsRootView(
                 title = stringResource(R.string.smart_playlist_favorites),
                 subtitle = stringResource(R.string.smart_playlist_favorites_count, favoritesCount),
                 icon = Icons.Rounded.Favorite,
-                iconColor = MaterialTheme.colorScheme.error,
-                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+                iconColor = MaterialTheme.colorScheme.tertiary,
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.35f),
                 onClick = onOpenFavorites
             )
         }

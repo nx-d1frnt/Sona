@@ -212,4 +212,80 @@
     <string name="sona_live_repeating">On repeat: %1$s</string>
     <string name="sona_live_up_next">Up next: %1$s</string>
     <string name="sona_live_queue_end">Last track in queue</string>
+
+    <!-- M3 Expressive Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_cat_automix_title">Automix &amp; DJ Engine</string>
+    <string name="settings_cat_automix_desc">Transition curves, harmonic mixing rules, cue detection, and library analysis</string>
+
+    <string name="settings_cat_library_title">Library Management</string>
+    <string name="settings_cat_library_desc">Blacklist folders, artist name separators, and scanning preferences</string>
+
+    <string name="settings_cat_playback_title">Audio &amp; Playback</string>
+    <string name="settings_cat_playback_desc">Gapless playback, audio focus ducking, and headphone disconnect behavior</string>
+
+    <string name="settings_cat_appearance_title">Appearance &amp; Theme</string>
+    <string name="settings_cat_appearance_desc">Dynamic Monet colors, artwork palette synchronization, and dark mode</string>
+
+    <string name="settings_cat_about_title">About &amp; Diagnostics</string>
+    <string name="settings_cat_about_desc">App version, database analysis statistics, and cache management</string>
+
+    <!-- Automix Settings -->
+    <string name="settings_automix_duration_title">Transition Duration</string>
+    <string name="settings_automix_duration_desc">Crossfade window duration for beatmatched DJ transitions</string>
+    <string name="settings_automix_duration_value">%d seconds</string>
+    <string name="settings_automix_harmonic_title">Harmonic Mixing Rules</string>
+    <string name="settings_automix_harmonic_desc">Follow Camelot wheel key compatibility for smooth musical transitions</string>
+    <string name="settings_automix_vocal_clash_title">Avoid Vocal Clashes</string>
+    <string name="settings_automix_vocal_clash_desc">Use YAMNet AI to detect vocals and prevent overlapping singer segments</string>
+    <string name="settings_automix_energy_title">Energy Flow Matching</string>
+    <string name="settings_automix_energy_desc">Align track energy levels for natural momentum buildup</string>
+
+    <!-- Library Settings -->
+    <string name="settings_library_blacklist_title">Blacklist Folders</string>
+    <string name="settings_library_blacklist_desc">Exclude folders (e.g. ringtones, podcasts, recordings) from your music library</string>
+    <string name="settings_library_no_folders">No music folders scanned yet</string>
+    <string name="settings_library_add_folder">Add custom folder to blacklist</string>
+    <string name="settings_library_folder_dialog_title">Exclude Folder Path</string>
+    <string name="settings_library_folder_dialog_hint">e.g. /storage/emulated/0/Ringtones</string>
+    <string name="settings_library_folder_track_count">%d tracks</string>
+
+    <string name="settings_library_separators_title">Artist Name Separators</string>
+    <string name="settings_library_separators_desc">Delimiters used to split multi-artist tracks in the Artists tab</string>
+    <string name="settings_library_custom_separator_hint">Add custom delimiter (e.g. x, vs.)</string>
+    <string name="settings_library_add_separator">Add</string>
+
+    <!-- Audio & Playback Settings -->
+    <string name="settings_audio_gapless_title">Gapless Playback</string>
+    <string name="settings_audio_gapless_desc">Eliminate silence between consecutive tracks</string>
+    <string name="settings_audio_ducking_title">Audio Focus Ducking</string>
+    <string name="settings_audio_ducking_desc">Lower volume instead of pausing when navigation or notifications chime</string>
+    <string name="settings_audio_headset_title">Pause on Disconnect</string>
+    <string name="settings_audio_headset_desc">Automatically pause playback when headphones or Bluetooth disconnect</string>
+
+    <!-- Appearance Settings -->
+    <string name="settings_appearance_theme_title">Theme Mode</string>
+    <string name="settings_appearance_theme_system">System</string>
+    <string name="settings_appearance_theme_light">Light</string>
+    <string name="settings_appearance_theme_dark">Dark</string>
+    <string name="settings_appearance_monet_title">Dynamic Monet Colors</string>
+    <string name="settings_appearance_monet_desc">Use Material You system wallpaper colors on Android 12+</string>
+    <string name="settings_appearance_artwork_title">Artwork Palette Adaptation</string>
+    <string name="settings_appearance_artwork_desc">Dynamically tint the now-playing player with album artwork tones</string>
+    <string name="settings_appearance_expressive_title">Expressive UI Motion</string>
+    <string name="settings_appearance_expressive_desc">Fluid spring physics and expressive transitions across the app</string>
+
+    <!-- About & Diagnostics Settings -->
+    <string name="settings_about_app_title">Sona Music Player</string>
+    <string name="settings_about_version">Version %s</string>
+    <string name="settings_about_tech_desc">Built with Jetpack Compose, Material 3 Expressive, Media3 ExoPlayer, and TensorFlow Lite YAMNet</string>
+    <string name="settings_about_db_title">Analysis Database</string>
+    <string name="settings_about_db_stats">%1$d analyzed tracks cached</string>
+    <string name="settings_about_clear_cache_title">Clear Analysis Cache</string>
+    <string name="settings_about_clear_cache_desc">Delete all cached beat grids, key signatures, and vocal classifications</string>
+    <string name="settings_about_clear_cache_dialog_title">Clear Analysis Cache?</string>
+    <string name="settings_about_clear_cache_dialog_msg">This will remove all pre-computed Automix points and vocal maps. You can recalculate anytime.</string>
+    <string name="settings_about_cache_cleared_toast">Analysis cache cleared</string>
+    <string name="settings_about_reset_title">Reset All Settings</string>
+    <string name="settings_about_reset_desc">Restore all preferences to factory defaults</string>
 </resources>

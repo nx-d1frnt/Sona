@@ -15,6 +15,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.ln
@@ -54,7 +55,7 @@ class AudioAnalysisEngine(private val context: Context) {
 
     fun getCached(songId: Long): TrackAnalysis? = memoryCache[songId]
 
-    fun getAllCached(): Map<Long, TrackAnalysis> = HashMap(memoryCache)
+    fun getAllCached(): Map<Long, TrackAnalysis> = Collections.unmodifiableMap(memoryCache)
 
     fun needsAnalysis(songId: Long): Boolean = memoryCache[songId]?.isComplete != true
 

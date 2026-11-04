@@ -50,6 +50,8 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledIconToggleButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -78,6 +80,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -372,48 +375,43 @@ fun NowPlayingScreen(
 
                     Spacer(modifier = Modifier.width(12.dp))
 
-                    // Expressive action pills (Share & Like) с динамическими цветами от обложки
+                    // Expressive action pills (Share & Like) с динамическими цветами от обложки и M3 accessibility
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color.White.copy(alpha = 0.14f),
-                            modifier = Modifier.size(44.dp)
+                        FilledTonalIconButton(
+                            onClick = onShareClick,
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = Color.White.copy(alpha = 0.14f),
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.size(48.dp)
                         ) {
-                            IconButton(onClick = onShareClick) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Share,
-                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_share),
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Rounded.Share,
+                                contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_share),
+                                modifier = Modifier.size(20.dp)
+                            )
                         }
 
-                        val favoriteBgColor by animateColorAsState(
-                            targetValue = if (isFavorite) palette.primaryAccent else Color.White.copy(alpha = 0.14f),
-                            label = "FavoriteBg"
-                        )
-                        val favoriteIconColor by animateColorAsState(
-                            targetValue = if (isFavorite) palette.onPrimaryAccent else Color.White,
-                            label = "FavoriteIcon"
-                        )
-
-                        Surface(
+                        FilledIconToggleButton(
+                            checked = isFavorite,
+                            onCheckedChange = { onToggleFavorite() },
+                            colors = IconButtonDefaults.filledIconToggleButtonColors(
+                                containerColor = Color.White.copy(alpha = 0.14f),
+                                contentColor = Color.White,
+                                checkedContainerColor = palette.primaryAccent,
+                                checkedContentColor = palette.onPrimaryAccent
+                            ),
                             shape = RoundedCornerShape(16.dp),
-                            color = favoriteBgColor,
-                            modifier = Modifier.size(44.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
-                            IconButton(onClick = onToggleFavorite) {
-                                Icon(
-                                    imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                    contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_favorite),
-                                    tint = favoriteIconColor,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_favorite),
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
                 }
@@ -580,13 +578,16 @@ fun NowPlayingScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Queue pill (opens Queue & Automix Chain sheet)
+                        // Queue pill (opens Queue & Automix Chain sheet) with M3 touch target >= 48dp
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = if (isQueueSheetOpen) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
-                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                            modifier = Modifier.size(width = 48.dp, height = 48.dp)
                         ) {
-                            IconButton(onClick = { isQueueSheetOpen = !isQueueSheetOpen }) {
+                            IconButton(
+                                onClick = { isQueueSheetOpen = !isQueueSheetOpen },
+                                modifier = Modifier.size(48.dp)
+                            ) {
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
                                     contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_queue),
@@ -616,8 +617,8 @@ fun NowPlayingScreen(
                             shape = RoundedCornerShape(16.dp),
                             color = automixBg,
                             modifier = Modifier
-                                .height(40.dp)
-                                .clickable(onClick = onAutomixClick)
+                                .height(48.dp)
+                                .clickable(role = Role.Button, onClick = onAutomixClick)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 12.dp),
@@ -662,8 +663,8 @@ fun NowPlayingScreen(
                             shape = RoundedCornerShape(16.dp),
                             color = shuffleBg,
                             modifier = Modifier
-                                .height(40.dp)
-                                .clickable(onClick = onShuffleClick)
+                                .height(48.dp)
+                                .clickable(role = Role.Button, onClick = onShuffleClick)
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 12.dp),
@@ -688,14 +689,17 @@ fun NowPlayingScreen(
                             }
                         }
 
-                        // Repeat pill (Monet PrimaryContainer & OnPrimaryContainer)
+                        // Repeat pill (Monet PrimaryContainer & OnPrimaryContainer) with M3 touch target >= 48dp
                         val isRepeatActive = repeatMode != Player.REPEAT_MODE_OFF
                         Surface(
                             shape = RoundedCornerShape(16.dp),
                             color = if (isRepeatActive) palette.primaryContainer.copy(alpha = 0.85f) else Color.White.copy(alpha = 0.12f),
-                            modifier = Modifier.size(width = 48.dp, height = 40.dp)
+                            modifier = Modifier.size(width = 48.dp, height = 48.dp)
                         ) {
-                            IconButton(onClick = onRepeatClick) {
+                            IconButton(
+                                onClick = onRepeatClick,
+                                modifier = Modifier.size(48.dp)
+                            ) {
                                 val icon = if (repeatMode == Player.REPEAT_MODE_ONE) {
                                     Icons.Rounded.RepeatOne
                                 } else {
@@ -715,9 +719,12 @@ fun NowPlayingScreen(
                     Surface(
                         shape = CircleShape,
                         color = Color.White.copy(alpha = 0.12f),
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
-                        IconButton(onClick = onMoreClick) {
+                        IconButton(
+                            onClick = onMoreClick,
+                            modifier = Modifier.size(48.dp)
+                        ) {
                             Icon(
                                 imageVector = Icons.Rounded.MoreVert,
                                 contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_more),

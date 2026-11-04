@@ -34,12 +34,16 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Update
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
@@ -135,7 +139,7 @@ fun HomeScreen(
             }
         }
 
-        // 2. Quick Action Pills Carousel
+        // 2. Quick Action Pills Carousel (M3 Semantic Chips)
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -143,91 +147,67 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Automix Pill
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = if (isAutomixEnabled) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable(onClick = onToggleAutomix)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            // Automix Toggle FilterChip
+            FilterChip(
+                selected = isAutomixEnabled,
+                onClick = onToggleAutomix,
+                label = {
+                    Text(
+                        text = stringResource(R.string.home_quick_mix),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                },
+                leadingIcon = {
                     Icon(
                         imageVector = Icons.Rounded.AutoAwesome,
                         contentDescription = null,
-                        tint = if (isAutomixEnabled) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = stringResource(R.string.home_quick_mix),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        color = if (isAutomixEnabled) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
+                },
+                shape = RoundedCornerShape(16.dp)
+            )
 
-            // Shuffle All Pill
+            // Shuffle All AssistChip
             if (allSongs.isNotEmpty()) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { onPlayAll(allSongs, true) }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                AssistChip(
+                    onClick = { onPlayAll(allSongs, true) },
+                    label = {
+                        Text(
+                            text = stringResource(R.string.action_shuffle),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    leadingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.Shuffle,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(AssistChipDefaults.IconSize)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = stringResource(R.string.action_shuffle),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
+                    },
+                    shape = RoundedCornerShape(16.dp)
+                )
             }
 
-            // Favorites Quick Play Pill
+            // Favorites Quick Play AssistChip
             if (favoriteSongs.isNotEmpty()) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { onPlayAll(favoriteSongs, false) }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                AssistChip(
+                    onClick = { onPlayAll(favoriteSongs, false) },
+                    label = {
+                        Text(
+                            text = stringResource(R.string.smart_playlist_favorites),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    leadingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.Favorite,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(AssistChipDefaults.IconSize)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = stringResource(R.string.smart_playlist_favorites),
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
-                }
+                    },
+                    shape = RoundedCornerShape(16.dp)
+                )
             }
         }
 
@@ -243,7 +223,7 @@ fun HomeScreen(
                 colors = CardDefaults.cardColors(
                     containerColor = palette.surfaceContainerTint
                 ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp, pressedElevation = 4.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)

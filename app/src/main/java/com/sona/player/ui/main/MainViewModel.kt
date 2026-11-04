@@ -14,7 +14,10 @@ import com.sona.player.data.model.Song
 import com.sona.player.data.model.SortOrder
 import com.sona.player.data.model.TrackAudioDetails
 import com.sona.player.data.repository.AudioRepository
+import com.sona.player.data.repository.SettingsRepository
+import com.sona.player.data.repository.ThemeMode
 import com.sona.player.data.repository.UserLibraryRepository
+import com.sona.player.data.repository.UserSettings
 import com.sona.player.playback.MusicPlayerManager
 import com.sona.player.playback.PlayerState
 import com.sona.player.ui.components.ArtistAlbumViewTarget
@@ -45,13 +48,32 @@ enum class MainNavTab {
 class MainViewModel(
     private val repository: AudioRepository,
     private val userLibraryRepository: UserLibraryRepository,
-    private val playerManager: MusicPlayerManager
+    private val playerManager: MusicPlayerManager,
+    private val settingsRepository: SettingsRepository
 ) : ViewModel() {
+
+    val settings: StateFlow<UserSettings> = settingsRepository.settings
 
     val playerState: StateFlow<PlayerState> = playerManager.playerState
 
     private val _rawSongs = MutableStateFlow<List<Song>>(emptyList())
     val rawSongs: StateFlow<List<Song>> = _rawSongs.asStateFlow()
+
+    // Songs filtered by blacklisted folders
+    val activeSongs: StateFlow<List<Song>> = combine(_rawSongs, settings) { songs, userSettings ->
+        val blacklisted = userSettings.blacklistedFolders
+        if (blacklisted.isEmpty()) {
+            songs
+        } else {
+            songs.filter { song ->
+                val path = song.filePath
+                if (path.isBlank()) true
+                else {
+                    blacklisted.none { folder -> path == folder || path.startsWith("$folder/") }
+                }
+            }
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
@@ -94,7 +116,7 @@ class MainViewModel(
 
     // Main sorted and filtered song list
     val uiState: StateFlow<LibraryUiState> = combine(
-        _rawSongs,
+        activeSongs,
         _searchQuery,
         _sortOrder,
         _isLoading,
@@ -130,22 +152,22 @@ class MainViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LibraryUiState.Loading)
 
     // Derived smart collections
-    val favoriteSongs: StateFlow<List<Song>> = combine(_rawSongs, favorites) { songs, favs ->
+    val favoriteSongs: StateFlow<List<Song>> = combine(activeSongs, favorites) { songs, favs ->
         songs.filter { favs.contains(it.id) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val recentlyAddedSongs: StateFlow<List<Song>> = combine(_rawSongs) { (songs) ->
+    val recentlyAddedSongs: StateFlow<List<Song>> = combine(activeSongs) { (songs) ->
         songs.sortedByDescending { it.dateAdded }.take(100)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val mostPlayedSongs: StateFlow<List<Song>> = combine(_rawSongs, playStats) { songs, stats ->
+    val mostPlayedSongs: StateFlow<List<Song>> = combine(activeSongs, playStats) { songs, stats ->
         songs.filter { (stats[it.id] ?: 0) > 0 }
             .sortedByDescending { stats[it.id] ?: 0 }
             .take(100)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val automixVibeSets: StateFlow<Map<AutomixVibe, List<Song>>> = combine(
-        _rawSongs,
+        activeSongs,
         playerManager.libraryAnalysis,
         playStats
     ) { songs, _, stats ->
@@ -162,12 +184,12 @@ class MainViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-    val albums: StateFlow<List<Album>> = combine(_rawSongs) { (songs) ->
+    val albums: StateFlow<List<Album>> = combine(activeSongs) { (songs) ->
         UserLibraryRepository.extractAlbums(songs)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val artists: StateFlow<List<Artist>> = combine(_rawSongs) { (songs) ->
-        UserLibraryRepository.extractArtists(songs)
+    val artists: StateFlow<List<Artist>> = combine(activeSongs, settings) { songs, userSettings ->
+        UserLibraryRepository.extractArtists(songs, userSettings.artistSeparators)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val libraryAnalysis = playerManager.libraryAnalysis
@@ -181,6 +203,21 @@ class MainViewModel(
         }
     }
     fun cancelLibraryAnalysis() = playerManager.cancelLibraryAnalysis()
+
+    fun updateTransitionDuration(durationSec: Int) = settingsRepository.updateTransitionDuration(durationSec)
+    fun updateHarmonicMixingStrict(enabled: Boolean) = settingsRepository.updateHarmonicMixingStrict(enabled)
+    fun updateAvoidVocalClash(enabled: Boolean) = settingsRepository.updateAvoidVocalClash(enabled)
+    fun updateEnergyMatching(enabled: Boolean) = settingsRepository.updateEnergyMatching(enabled)
+    fun toggleFolderBlacklist(folderPath: String, blacklisted: Boolean) = settingsRepository.setFolderBlacklisted(folderPath, blacklisted)
+    fun updateArtistSeparators(separators: List<String>) = settingsRepository.updateArtistSeparators(separators)
+    fun updateGaplessPlayback(enabled: Boolean) = settingsRepository.updateGaplessPlayback(enabled)
+    fun updateAudioFocusDucking(enabled: Boolean) = settingsRepository.updateAudioFocusDucking(enabled)
+    fun updatePauseOnHeadsetDisconnect(enabled: Boolean) = settingsRepository.updatePauseOnHeadsetDisconnect(enabled)
+    fun updateThemeMode(mode: ThemeMode) = settingsRepository.updateThemeMode(mode)
+    fun updateUseDynamicMonet(enabled: Boolean) = settingsRepository.updateUseDynamicMonet(enabled)
+    fun updateUseArtworkPalette(enabled: Boolean) = settingsRepository.updateUseArtworkPalette(enabled)
+    fun updateExpressiveAnimations(enabled: Boolean) = settingsRepository.updateExpressiveAnimations(enabled)
+    fun resetSettings() = settingsRepository.resetToDefaults()
 
     fun onPermissionGranted() {
         _hasPermission.value = true

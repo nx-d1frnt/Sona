@@ -15,8 +15,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import com.sona.player.data.model.Song
 import com.sona.player.data.repository.AudioRepository
+import com.sona.player.data.repository.SettingsRepository
 import com.sona.player.data.repository.UserLibraryRepository
 import com.sona.player.playback.MusicPlayerManager
 import com.sona.player.ui.main.MainScreen
@@ -50,20 +53,25 @@ class MainActivity : ComponentActivity() {
 
         val repository = AudioRepository(applicationContext)
         val userLibraryRepository = UserLibraryRepository(applicationContext)
+        val settingsRepository = SettingsRepository(applicationContext)
         playerManager = MusicPlayerManager(applicationContext)
         playerManager.init()
 
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return MainViewModel(repository, userLibraryRepository, playerManager) as T
+                return MainViewModel(repository, userLibraryRepository, playerManager, settingsRepository) as T
             }
         })[MainViewModel::class.java]
 
         checkAndRequestStoragePermission()
 
         setContent {
-            SonaTheme {
+            val settings by viewModel.settings.collectAsState()
+            SonaTheme(
+                themeMode = settings.themeMode,
+                dynamicColor = settings.useDynamicMonet
+            ) {
                 MainScreen(
                     viewModel = viewModel,
                     onRequestPermission = { checkAndRequestStoragePermission() },

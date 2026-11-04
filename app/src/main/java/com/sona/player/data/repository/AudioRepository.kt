@@ -30,7 +30,8 @@ class AudioRepository(private val context: Context) {
             MediaStore.Audio.Media.TRACK,
             MediaStore.Audio.Media.YEAR,
             MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.DATE_ADDED
+            MediaStore.Audio.Media.DATE_ADDED,
+            MediaStore.Audio.Media.DATA
         )
 
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
@@ -55,6 +56,7 @@ class AudioRepository(private val context: Context) {
             val yearCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.YEAR)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
             val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+            val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
 
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
@@ -67,6 +69,7 @@ class AudioRepository(private val context: Context) {
                 val year = cursor.getInt(yearCol)
                 val size = cursor.getLong(sizeCol)
                 val dateAdded = cursor.getLong(dateCol)
+                val filePath = if (dataCol >= 0) cursor.getString(dataCol) ?: "" else ""
 
                 val contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
                 val albumArtUri = ContentUris.withAppendedId(artworkUriBase, albumId)
@@ -83,7 +86,8 @@ class AudioRepository(private val context: Context) {
                         trackNumber = track,
                         year = year,
                         size = size,
-                        dateAdded = dateAdded
+                        dateAdded = dateAdded,
+                        filePath = filePath
                     )
                 )
             }

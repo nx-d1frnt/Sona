@@ -141,17 +141,43 @@ class UserLibraryRepository(private val context: Context) {
                 .sortedBy { it.title.lowercase() }
         }
 
-        fun extractArtists(songs: List<Song>): List<Artist> {
-            return songs.groupBy { it.artist }
-                .map { (artistName, artistSongs) ->
-                    val albumCount = artistSongs.map { it.album }.distinct().size
-                    Artist(
-                        name = artistName,
-                        songCount = artistSongs.size,
-                        albumCount = albumCount
-                    )
+        fun extractArtists(songs: List<Song>, separators: List<String> = emptyList()): List<Artist> {
+            if (separators.isEmpty()) {
+                return songs.groupBy { it.artist }
+                    .map { (artistName, artistSongs) ->
+                        val albumCount = artistSongs.map { it.album }.distinct().size
+                        Artist(
+                            name = artistName,
+                            songCount = artistSongs.size,
+                            albumCount = albumCount
+                        )
+                    }
+                    .sortedBy { it.name.lowercase() }
+            }
+
+            val artistToSongs = mutableMapOf<String, MutableList<Song>>()
+            for (song in songs) {
+                var splitNames = listOf(song.artist)
+                for (sep in separators) {
+                    if (sep.isNotEmpty()) {
+                        splitNames = splitNames.flatMap { it.split(sep) }
+                    }
                 }
-                .sortedBy { it.name.lowercase() }
+                val cleaned = splitNames.map { it.trim() }.filter { it.isNotEmpty() && it != "<unknown>" }
+                val finalNames = if (cleaned.isEmpty()) listOf(song.artist.ifBlank { "Unknown Artist" }) else cleaned.distinct()
+                for (name in finalNames) {
+                    artistToSongs.getOrPut(name) { mutableListOf() }.add(song)
+                }
+            }
+
+            return artistToSongs.map { (artistName, artistSongs) ->
+                val albumCount = artistSongs.map { it.album }.distinct().size
+                Artist(
+                    name = artistName,
+                    songCount = artistSongs.size,
+                    albumCount = albumCount
+                )
+            }.sortedBy { it.name.lowercase() }
         }
     }
 }

@@ -168,6 +168,10 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun clearAll(): Int {
+        return writableDatabase.delete(TABLE_NAME, null, null)
+    }
+
     private fun analysisToContentValues(analysis: TrackAnalysis): ContentValues {
         val safeBpm = if (analysis.bpm.isFinite()) analysis.bpm else 120.0f
         val safeEnergy = if (analysis.energy.isFinite()) analysis.energy else 0.6f
