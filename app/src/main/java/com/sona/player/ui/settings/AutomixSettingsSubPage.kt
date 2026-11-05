@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Bolt
@@ -56,6 +57,7 @@ fun AutomixSettingsSubPage(
     analysisState: LibraryAnalysisState,
     canAnalyze: Boolean,
     onUpdateTransitionDuration: (Int) -> Unit,
+    onUpdateAutomixPlaylistSize: (Int) -> Unit,
     onUpdateHarmonicMixingStrict: (Boolean) -> Unit,
     onUpdateAvoidVocalClash: (Boolean) -> Unit,
     onUpdateEnergyMatching: (Boolean) -> Unit,
@@ -285,6 +287,21 @@ fun AutomixSettingsSubPage(
                 steps = 11,
                 valueLabel = stringResource(R.string.settings_automix_duration_value, settings.transitionDurationSeconds),
                 onValueChange = { onUpdateTransitionDuration(it.toInt()) },
+                position = ConnectedPosition.Single
+            )
+        }
+
+        // Automix Playlist Size
+        ExpressiveSettingsGroup(title = stringResource(R.string.settings_automix_playlist_size_title)) {
+            ExpressiveSliderItem(
+                title = stringResource(R.string.settings_automix_playlist_size_title),
+                subtitle = stringResource(R.string.settings_automix_playlist_size_desc),
+                icon = Icons.AutoMirrored.Rounded.QueueMusic,
+                value = settings.automixPlaylistSize.toFloat(),
+                valueRange = 20f..100f,
+                steps = 15,
+                valueLabel = stringResource(R.string.settings_automix_playlist_size_value, settings.automixPlaylistSize),
+                onValueChange = { onUpdateAutomixPlaylistSize(it.toInt()) },
                 position = ConnectedPosition.Single
             )
         }

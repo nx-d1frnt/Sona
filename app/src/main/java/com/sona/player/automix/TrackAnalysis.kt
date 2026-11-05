@@ -112,7 +112,8 @@ data class TrackAnalysis(
     val loudnessAnalyzed: Boolean = false,
     val keyIndex: Int = -1,           // 0..11 major tonic (C..B), 12..23 minor tonic; -1 unknown
     val keyConfidence: Float = 0f,
-    val keyAnalyzed: Boolean = false   // Key pass attempted (a null key may still be a valid result)
+    val keyAnalyzed: Boolean = false,  // Key pass attempted (a null key may still be a valid result)
+    val energyAnalysisVersion: Int = TrackEnergyAnalyzer.VERSION
 ) {
     val musicalKey: MusicalKey? get() = MusicalKey.fromIndex(keyIndex, keyConfidence)
 
@@ -130,7 +131,10 @@ data class TrackAnalysis(
         get() = vocalAnalysisVersion == VocalActivity.VERSION && vocalSections.isNotEmpty()
 
     /** All analysis passes for the current schema have been attempted. */
-    val isComplete: Boolean get() = loudnessAnalyzed && featureAnalysisAttempted && keyAnalyzed
+    val isComplete: Boolean get() = loudnessAnalyzed && featureAnalysisAttempted && keyAnalyzed && hasCurrentEnergyAnalysis
+
+    internal val hasCurrentEnergyAnalysis: Boolean
+        get() = energyAnalysisVersion == TrackEnergyAnalyzer.VERSION && energy.isFinite() && energy in 0f..1f
 
     /**
      * Resolves [AutomixMode.AUTO_DJ] into either [AutomixMode.QUICK_MID_MIX] or [AutomixMode.CLASSIC_OUTRO]

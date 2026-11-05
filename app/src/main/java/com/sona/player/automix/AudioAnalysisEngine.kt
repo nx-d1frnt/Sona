@@ -18,7 +18,7 @@ import java.io.File
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
-import kotlin.math.ln
+import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -91,17 +91,18 @@ class AudioAnalysisEngine(private val context: Context) {
     }
 
     // Extend older entries in place: cached beats survive and stale/missing vocals are refreshed.
-    // Only the passes that are missing (loudness, key, and/or vocals) are computed from the decoded windows.
+    // Only missing or outdated passes are computed from the decoded windows.
     private suspend fun enrichMissing(song: Song, existing: TrackAnalysis): TrackAnalysis {
         val duration = existing.durationMs
-        val ranges = listOf(
-            0L to minOf(24_000L, duration * 35 / 100),
-            (duration * 0.48).toLong() to minOf(14_000L, duration / 4),
-            (duration - minOf(38_000L, duration * 28 / 100)).coerceAtLeast(0L) to minOf(38_000L, duration * 28 / 100)
-        )
+        val ranges = analysisWindowRanges(duration)
         val windows = mutableListOf<AudioWindow>()
         windowDecoder.decodeWindows(song, ranges) { windows.add(it) }
         var result = existing
+        if (!existing.hasCurrentEnergyAnalysis) {
+            TrackEnergyAnalyzer.analyze(windows, existing.bpm)?.let { energy ->
+                result = result.copy(energy = energy, energyAnalysisVersion = TrackEnergyAnalyzer.VERSION)
+            }
+        }
         if (!existing.loudnessAnalyzed) {
             result = result.copy(loudnessSections = windows.mapNotNull { LoudnessAnalyzer.analyze(it) }, loudnessAnalyzed = true)
         }
@@ -129,25 +130,21 @@ class AudioAnalysisEngine(private val context: Context) {
         return result
     }
 
+    // Fresh analysis and enrichment must sample identical sections of the track.
+    private fun analysisWindowRanges(durationMs: Long): List<Pair<Long, Long>> {
+        val introMs = min(24_000L, durationMs * 35L / 100L)
+        val coreStartMs = (durationMs * 0.48f).toLong()
+        val coreMs = (durationMs * 0.22f).toLong().coerceIn(14_000L, 42_000L)
+        val outroMs = (durationMs * 0.28f).toLong().coerceIn(18_000L, 38_000L)
+            .coerceAtMost(durationMs / 2)
+        return listOf(0L to introMs, coreStartMs to coreMs, (durationMs - outroMs) to outroMs)
+    }
+
     private suspend fun decodeAndAnalyze(song: Song): TrackAnalysis {
         val startedAt = android.os.SystemClock.elapsedRealtime()
         val durationMs = song.durationMs.coerceAtLeast(15_000L)
 
-        // 1. Sample 3 structural windows:
-        // - Intro: first 24s (up to 35% of track) at 40 Hz (25ms frames) for smart Beat-Drop Cue-In
-        // - Core/Mid: 48% .. 70% of track at 40 Hz (25ms frames) for BPM & Mid-Track Post-Chorus Breakdown
-        // - Outro: last 28% of track (18s..38s) at 25 Hz (40ms frames) for Outro Phrase Mix-Out
-        val introWindowMs = min(24_000L, (durationMs * 35L) / 100L)
-        val coreStartMs = (durationMs * 0.48f).toLong()
-        val coreWindowMs = (durationMs * 0.22f).toLong().coerceIn(14_000L, 42_000L)
-        val outroWindowMs = (durationMs * 0.28f).toLong().coerceIn(18_000L, 38_000L)
-            .coerceAtMost(durationMs / 2)
-        val outroStartMs = (durationMs - outroWindowMs).coerceAtLeast(0L)
-        val windowRanges = listOf(
-            0L to introWindowMs,
-            coreStartMs to coreWindowMs,
-            outroStartMs to outroWindowMs
-        )
+        val windowRanges = analysisWindowRanges(durationMs)
         val windows = mutableListOf<AudioWindow>()
         val beats = mutableListOf<BeatSection>()
         val vocals = mutableListOf<VocalSection>()
@@ -210,21 +207,23 @@ class AudioAnalysisEngine(private val context: Context) {
             return createFallbackAnalysis(song)
         }
 
-        // 2. Compute normalized perceptual Energy (0.0 .. 1.0)
         val avgRms = coreFrames.average().toFloat()
         val peakRms = (coreFrames.maxOrNull() ?: 0.2f).coerceAtLeast(0.01f)
-        // Convert linear RMS to perceptual dB-like 0..1 scale
-        val dbValue = 20f * (ln(avgRms.coerceAtLeast(0.0005f)) / ln(10f))
-        val normalizedEnergy = ((dbValue + 38f) / 32f).coerceIn(0.12f, 0.98f)
 
-        // 3. Compute BPM via onset flux autocorrelation on 40 Hz core envelope (with half-time octave folding)
+        // 2. Compute BPM via onset flux autocorrelation on 40 Hz core envelope (with half-time octave folding)
+        // Preserve the tempo detector's existing octave prior independently of the new energy scale.
+        val coreLevelPrior = ((20f * log10(avgRms.coerceAtLeast(0.0005f)) + 38f) / 32f)
+            .coerceIn(0.12f, 0.98f)
         val measuredBpm = beats.firstOrNull { it.startMs == core.startMs && it.confidence >= 0.65f }?.bpm
         val estimatedBpm = measuredBpm ?: estimateBpmFromEnvelope(
             envelope = coreFrames,
             envelopeHz = 40f,
-            normalizedEnergy = normalizedEnergy,
+            coreLevelPrior = coreLevelPrior,
             songId = song.id
         )
+
+        // 3. Estimate acoustic intensity across all decoded structural windows.
+        val normalizedEnergy = TrackEnergyAnalyzer.analyze(windows, estimatedBpm) ?: return createFallbackAnalysis(song)
 
         // 4. Recommended DJ Transition Duration based on BPM (8 bars / 16 beats of musical overlap)
         val recommendedMixDurationMs = when {
@@ -505,7 +504,7 @@ class AudioAnalysisEngine(private val context: Context) {
     private fun estimateBpmFromEnvelope(
         envelope: FloatArray,
         envelopeHz: Float,
-        normalizedEnergy: Float,
+        coreLevelPrior: Float,
         songId: Long
     ): Float {
         if (envelope.size < 60) return fallbackBpmForId(songId)
@@ -557,11 +556,11 @@ class AudioAnalysisEngine(private val context: Context) {
 
         var rawBpm = (60f * envelopeHz) / bestLag
         // Octave folding: if autocorrelation locked onto a 2-bar half-time subharmonic (e.g. 73 BPM instead of 146 BPM),
-        // check the double-time lag (bestLag / 2) and fold up when double-time harmonic is strong or track energy is high!
+        // Check the double-time lag and retain the historical core-level octave prior.
         if (rawBpm < 88f) {
             val halfLag = (bestLag / 2).coerceIn(minLag, maxLag)
             val doubleTimeCorr = corrByLag[halfLag]
-            if (doubleTimeCorr >= bestCorr * 0.58f || normalizedEnergy >= 0.48f) {
+            if (doubleTimeCorr >= bestCorr * 0.58f || coreLevelPrior >= 0.48f) {
                 rawBpm *= 2f
             }
         }
@@ -573,7 +572,7 @@ class AudioAnalysisEngine(private val context: Context) {
         val duration = song.durationMs.coerceAtLeast(15_000L)
         val bpm = fallbackBpmForId(song.id)
         val hashOffset = (abs(song.id.hashCode()) % 15) // 0..14% deterministic per-song spread if fallback is ever used
-        val energy = 0.55f + ((abs(song.id.hashCode()) % 35) / 100f)
+        val energy = 0.5f // Neutral placeholder; a song ID contains no acoustic evidence.
         val mixDuration = 10500L
         val mixOut = (duration - mixDuration - 3500L - (hashOffset * 400L))
             .coerceIn((duration * 0.72f).toLong(), (duration * 0.89f).toLong())
@@ -582,7 +581,8 @@ class AudioAnalysisEngine(private val context: Context) {
         return TrackAnalysis(
             songId = song.id,
             bpm = bpm,
-            energy = energy.coerceIn(0.25f, 0.90f),
+            energy = energy,
+            energyAnalysisVersion = 0,
             cueInMs = 800L,
             mixOutMs = mixOut,
             midMixOutMs = midMixOut,
@@ -623,6 +623,7 @@ class AudioAnalysisEngine(private val context: Context) {
                     songId = obj.getLong("songId"),
                     bpm = obj.getDouble("bpm").toFloat(),
                     energy = obj.getDouble("energy").toFloat(),
+                    energyAnalysisVersion = 0, // Legacy energy was core loudness only.
                     cueInMs = obj.getLong("cueInMs"),
                     mixOutMs = obj.getLong("mixOutMs"),
                     midMixOutMs = safeMid,

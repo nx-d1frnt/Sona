@@ -35,6 +35,7 @@ enum class ThemeMode {
 data class UserSettings(
     // Automix settings
     val transitionDurationSeconds: Int = 8,
+    val automixPlaylistSize: Int = 50,
     val harmonicMixingStrict: Boolean = true,
     val avoidVocalClash: Boolean = true,
     val energyMatching: Boolean = true,
@@ -63,6 +64,7 @@ class SettingsRepository(private val context: Context) {
 
     object PreferencesKeys {
         val TRANSITION_DURATION = intPreferencesKey("automix_transition_duration")
+        val AUTOMIX_PLAYLIST_SIZE = intPreferencesKey("automix_playlist_size")
         val HARMONIC_MIXING_STRICT = booleanPreferencesKey("automix_harmonic_mixing_strict")
         val AVOID_VOCAL_CLASH = booleanPreferencesKey("automix_avoid_vocal_clash")
         val ENERGY_MATCHING = booleanPreferencesKey("automix_energy_matching")
@@ -109,6 +111,7 @@ class SettingsRepository(private val context: Context) {
 
             UserSettings(
                 transitionDurationSeconds = prefs[PreferencesKeys.TRANSITION_DURATION] ?: 8,
+                automixPlaylistSize = prefs[PreferencesKeys.AUTOMIX_PLAYLIST_SIZE] ?: 50,
                 harmonicMixingStrict = prefs[PreferencesKeys.HARMONIC_MIXING_STRICT] ?: true,
                 avoidVocalClash = prefs[PreferencesKeys.AVOID_VOCAL_CLASH] ?: true,
                 energyMatching = prefs[PreferencesKeys.ENERGY_MATCHING] ?: true,
@@ -160,6 +163,14 @@ class SettingsRepository(private val context: Context) {
         scope.launch {
             context.dataStore.edit { prefs ->
                 prefs[PreferencesKeys.TRANSITION_DURATION] = durationSec.coerceIn(4, 16)
+            }
+        }
+    }
+
+    fun updateAutomixPlaylistSize(size: Int) {
+        scope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.AUTOMIX_PLAYLIST_SIZE] = size.coerceIn(20, 100)
             }
         }
     }

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sona_splash_background">#140C1F</color>
+    <style name="Theme.Sona" parent="android:style/Theme.Material.NoActionBar" />
+    <style name="Theme.Sona.Starting" parent="Theme.Sona">
+        <item name="android:windowBackground">@drawable/sona_splash_background</item>
+        <item name="android:statusBarColor">@color/sona_splash_background</item>
+        <item name="android:navigationBarColor">@color/sona_splash_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

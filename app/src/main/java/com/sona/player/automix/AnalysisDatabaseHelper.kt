@@ -19,12 +19,13 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
 ) {
     companion object {
         private const val DATABASE_NAME = "sona_automix_analysis.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
 
         private const val TABLE_NAME = "track_analysis"
         private const val COL_SONG_ID = "song_id"
         private const val COL_BPM = "bpm"
         private const val COL_ENERGY = "energy"
+        private const val COL_ENERGY_VERSION = "energy_version"
         private const val COL_CUE_IN_MS = "cue_in_ms"
         private const val COL_MIX_OUT_MS = "mix_out_ms"
         private const val COL_MID_MIX_OUT_MS = "mid_mix_out_ms"
@@ -50,6 +51,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 $COL_SONG_ID INTEGER PRIMARY KEY,
                 $COL_BPM REAL NOT NULL,
                 $COL_ENERGY REAL NOT NULL,
+                $COL_ENERGY_VERSION INTEGER NOT NULL DEFAULT 0,
                 $COL_CUE_IN_MS INTEGER NOT NULL,
                 $COL_MIX_OUT_MS INTEGER NOT NULL,
                 $COL_MID_MIX_OUT_MS INTEGER NOT NULL,
@@ -92,6 +94,10 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
             // v4: improved key detection (spectral peak-picking and modern Temperley profiles).
             // Re-analyze key for existing rows on their next enrichment pass.
             db.execSQL("UPDATE $TABLE_NAME SET $COL_KEY_ANALYZED = 0, $COL_KEY_INDEX = -1, $COL_KEY_CONFIDENCE = 0")
+        }
+        if (oldVersion < 5) {
+            // Recompute energy lazily while preserving beats, cues, key and vocals.
+            db.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN $COL_ENERGY_VERSION INTEGER NOT NULL DEFAULT 0")
         }
     }
 
@@ -149,6 +155,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
                     songId = songId,
                     bpm = it.getFloat(bpmCol),
                     energy = it.getFloat(energyCol),
+                    energyAnalysisVersion = it.getInt(it.getColumnIndexOrThrow(COL_ENERGY_VERSION)),
                     cueInMs = it.getLong(cueInCol),
                     mixOutMs = it.getLong(mixOutCol),
                     midMixOutMs = safeMid,
@@ -225,6 +232,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
             put(COL_SONG_ID, analysis.songId)
             put(COL_BPM, safeBpm)
             put(COL_ENERGY, safeEnergy)
+            put(COL_ENERGY_VERSION, analysis.energyAnalysisVersion)
             put(COL_CUE_IN_MS, analysis.cueInMs)
             put(COL_MIX_OUT_MS, analysis.mixOutMs)
             put(COL_MID_MIX_OUT_MS, analysis.midMixOutMs)

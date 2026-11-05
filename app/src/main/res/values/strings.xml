@@ -126,7 +126,7 @@
     <!-- Playlists -->
     <string name="playlists_smart_section">Smart Mixes</string>
     <string name="playlists_automix_sets_section">Automix DJ Sets</string>
-    <string name="playlists_automix_sets_desc">Seamless harmonic sets dynamically mixed from your audio analysis</string>
+    <string name="playlists_automix_sets_desc">Daily harmonic sets dynamically mixed from your audio analysis • Refreshed daily</string>
     <string name="playlists_my_section">My Playlists</string>
     <string name="vibe_high_energy_title">Peak Hour</string>
     <string name="vibe_high_energy_sub">High Energy • Fast Transitions</string>
@@ -239,6 +239,9 @@
     <string name="settings_cat_about_desc">App version, database analysis statistics, and cache management</string>
 
     <!-- Automix Settings -->
+    <string name="settings_automix_playlist_size_title">Automix Playlist Size</string>
+    <string name="settings_automix_playlist_size_desc">Target number of tracks sequenced for Automix sets and Smart mixes</string>
+    <string name="settings_automix_playlist_size_value">%d tracks</string>
     <string name="settings_automix_duration_title">Transition Duration</string>
     <string name="settings_automix_duration_desc">Crossfade window duration for beatmatched DJ transitions</string>
     <string name="settings_automix_duration_value">%d seconds</string>
@@ -248,6 +251,8 @@
     <string name="settings_automix_vocal_clash_desc">Use YAMNet AI to detect vocals and prevent overlapping singer segments</string>
     <string name="settings_automix_energy_title">Energy Flow Matching</string>
     <string name="settings_automix_energy_desc">Align track energy levels for natural momentum buildup</string>
+    <string name="automix_daily_badge">DAILY MIX</string>
+    <string name="automix_refresh_action">Refresh mix</string>
 
     <!-- Library Settings -->
     <string name="settings_library_blacklist_title">Blacklist Folders</string>

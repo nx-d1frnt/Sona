@@ -26,6 +26,7 @@ internal object TrackDiagnosticsReport {
         appendLine("songId=${track.songId} durationMs=${track.durationMs}")
         appendLine("complete=${track.isComplete} featuresAttempted=${track.featureAnalysisAttempted}")
         appendLine("bpm=${track.bpm} energy=${track.energy}")
+        appendLine("energyVersion=${track.energyAnalysisVersion} energyCurrent=${track.hasCurrentEnergyAnalysis}")
         appendLine("key=${track.musicalKey?.camelotLabel ?: "unknown"} keyIndex=${track.keyIndex}")
         appendLine("keyConfidence=${track.keyConfidence} keyAnalyzed=${track.keyAnalyzed}")
         appendLine("cueInMs=${track.cueInMs} deepCueInMs=${track.deepCueInMs}")

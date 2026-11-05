@@ -126,7 +126,7 @@
     <!-- Playlists -->
     <string name="playlists_smart_section">Смарт-добірки</string>
     <string name="playlists_automix_sets_section">Автомікс DJ-сети</string>
-    <string name="playlists_automix_sets_desc">Гармонійні сети з плавним зведенням на основі аналізу треків</string>
+    <string name="playlists_automix_sets_desc">Гармонійні сети з плавним зведенням на основі аналізу • Оновлюються щодня</string>
     <string name="playlists_my_section">Мої плейлисти</string>
     <string name="vibe_high_energy_title">Година пік (Драйв)</string>
     <string name="vibe_high_energy_sub">Висока енергія • Швидкі переходи</string>
@@ -181,6 +181,11 @@
 
     <!-- Settings Dialog & Library Analysis -->
     <string name="settings_automix_title">Налаштування автоміксу</string>
+    <string name="settings_automix_playlist_size_title">Розмір Automix-плейлистів</string>
+    <string name="settings_automix_playlist_size_desc">Кількість треків для Automix сетів та смарт-міксів</string>
+    <string name="settings_automix_playlist_size_value">%d треків</string>
+    <string name="automix_daily_badge">DAILY MIX</string>
+    <string name="automix_refresh_action">Оновити мікс</string>
     <string name="settings_library_analysis_title">Аналіз усієї медіатеки</string>
     <string name="settings_library_analysis_description">Розпізнає вокал, ритм, гучність і точки переходів. Результати зберігаються на пристрої та використовуються повторно.</string>
     <string name="settings_library_analysis_background_hint">Обробка працює з вимкненим екраном і очікує паузи у відтворенні. Прогрес доступний у сповіщенні.</string>

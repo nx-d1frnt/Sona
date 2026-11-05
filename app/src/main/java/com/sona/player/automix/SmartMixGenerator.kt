@@ -50,8 +50,16 @@ enum class AutomixVibe(
  */
 object SmartMixGenerator {
 
-    private const val DEFAULT_TARGET_TRACKS = 25
+    const val DEFAULT_TARGET_TRACKS = 50
     private const val MIN_RECOMMENDED_MATCHES = 15
+
+    fun currentDayEpoch(): Long {
+        return try {
+            java.time.LocalDate.now().toEpochDay()
+        } catch (_: Throwable) {
+            System.currentTimeMillis() / 86_400_000L
+        }
+    }
 
     /**
      * Filters tracks in the library matching an [AutomixVibe] profile.
@@ -126,20 +134,32 @@ object SmartMixGenerator {
         allSongs: List<Song>,
         analysisProvider: (Long) -> TrackAnalysis?,
         playStats: Map<Long, Int> = emptyMap(),
-        maxTracks: Int = DEFAULT_TARGET_TRACKS
+        maxTracks: Int = DEFAULT_TARGET_TRACKS,
+        dayEpoch: Long = currentDayEpoch()
     ): List<Song> {
         val matchingPool = filterTracksForVibe(vibe, allSongs, analysisProvider)
         if (matchingPool.isEmpty()) return emptyList()
         if (matchingPool.size == 1) return listOf(matchingPool.first().first)
 
         // Select the best anchor song (prefer popular / well-analyzed track with typical vibe tempo)
-        val starter = matchingPool.maxByOrNull { (song, analysis) ->
+        val sortedCandidates = matchingPool.map { pair ->
+            val (song, analysis) = pair
             val plays = playStats[song.id] ?: 0
             val conf = if (analysis.isComplete) 1f else 0.5f
-            plays * 2f + conf + (1f - abs(analysis.energy - 0.6f))
-        } ?: matchingPool.first()
+            val baseScore = plays * 2f + conf + (1f - abs(analysis.energy - 0.6f))
+            pair to baseScore
+        }.sortedWith(compareByDescending<Pair<Pair<Song, TrackAnalysis>, Float>> { it.second }.thenBy { it.first.first.id })
 
-        return chainTracks(starter, matchingPool, playStats, maxTracks)
+        val starter = if (dayEpoch != 0L) {
+            val windowSize = min(sortedCandidates.size, 12)
+            val seedHash = abs((dayEpoch * 31L + vibe.ordinal * 17L).hashCode())
+            val index = seedHash % windowSize
+            sortedCandidates[index].first
+        } else {
+            sortedCandidates.first().first
+        }
+
+        return chainTracks(starter, matchingPool, playStats, maxTracks, dayEpoch)
     }
 
     /**
@@ -150,7 +170,8 @@ object SmartMixGenerator {
         allSongs: List<Song>,
         analysisProvider: (Long) -> TrackAnalysis?,
         playStats: Map<Long, Int> = emptyMap(),
-        maxTracks: Int = DEFAULT_TARGET_TRACKS
+        maxTracks: Int = DEFAULT_TARGET_TRACKS,
+        dayEpoch: Long = 0L
     ): List<Song> {
         val seedAnalysis = analysisProvider(seedSong.id)
             ?: TrackAnalysis(
@@ -168,7 +189,7 @@ object SmartMixGenerator {
             song to analysis
         }
 
-        return chainTracks(seedSong to seedAnalysis, candidatePool, playStats, maxTracks)
+        return chainTracks(seedSong to seedAnalysis, candidatePool, playStats, maxTracks, dayEpoch)
     }
 
     /**
@@ -179,7 +200,8 @@ object SmartMixGenerator {
         anchor: Pair<Song, TrackAnalysis>,
         pool: List<Pair<Song, TrackAnalysis>>,
         playStats: Map<Long, Int> = emptyMap(),
-        maxTracks: Int = DEFAULT_TARGET_TRACKS
+        maxTracks: Int = DEFAULT_TARGET_TRACKS,
+        dayEpoch: Long = 0L
     ): List<Song> {
         val resultSongs = mutableListOf<Song>()
         val resultAnalyses = mutableListOf<TrackAnalysis>()
@@ -214,7 +236,13 @@ object SmartMixGenerator {
                 val plays = playStats[candidateSong.id] ?: 0
                 val playScore = (min(plays, 20) / 20f) * 0.06f
 
-                val finalScore = compatScore + playScore - artistPenalty
+                // Daily variety seed: subtle deterministic perturbation per day & track
+                val dailyJitter = if (dayEpoch != 0L) {
+                    val hash = abs((candidateSong.id xor (dayEpoch * 2654435761L)).hashCode()) % 1000
+                    (hash / 1000f - 0.5f) * 0.08f
+                } else 0f
+
+                val finalScore = compatScore + playScore - artistPenalty + dailyJitter
                 if (finalScore > bestScore) {
                     bestScore = finalScore
                     bestIndex = i

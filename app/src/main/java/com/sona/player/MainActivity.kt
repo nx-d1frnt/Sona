@@ -48,6 +48,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        configureSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 

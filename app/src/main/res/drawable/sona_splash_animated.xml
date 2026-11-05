@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/sona_splash_icon">
+    <target android:name="lower_ribbon" android:animation="@animator/sona_splash_lower" />
+    <target android:name="upper_ribbon" android:animation="@animator/sona_splash_upper" />
+</animated-vector>

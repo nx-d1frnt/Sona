@@ -324,6 +324,7 @@ fun MainScreen(
                     canAnalyze = canAnalyze,
                     onClose = { settingsOpen = false },
                     onUpdateTransitionDuration = { viewModel.updateTransitionDuration(it) },
+                    onUpdateAutomixPlaylistSize = { viewModel.updateAutomixPlaylistSize(it) },
                     onUpdateHarmonicMixingStrict = { viewModel.updateHarmonicMixingStrict(it) },
                     onUpdateAvoidVocalClash = { viewModel.updateAvoidVocalClash(it) },
                     onUpdateEnergyMatching = { viewModel.updateEnergyMatching(it) },
@@ -483,6 +484,7 @@ fun MainScreen(
                         onOpenMostPlayed = { viewModel.openMostPlayedView() },
                         onOpenAutomixSet = { viewModel.openAutomixSet(it) },
                         onPlayAutomixSet = { vibe, songs -> viewModel.playAutomixSet(vibe, songs) },
+                        onRefreshAutomixSet = { viewModel.refreshAutomixSet(it) },
                         onSaveAutomixSetAsPlaylist = { vibe, songs ->
                             val defaultName = context.getString(vibe.titleRes)
                             viewModel.saveSmartMixAsPlaylist(

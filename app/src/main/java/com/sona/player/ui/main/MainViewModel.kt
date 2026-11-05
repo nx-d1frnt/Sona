@@ -24,12 +24,18 @@ import com.sona.player.playback.PlayerState
 import com.sona.player.ui.components.ArtistAlbumViewTarget
 import com.sona.player.ui.components.PlaylistViewTarget
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 sealed interface LibraryUiState {
@@ -167,11 +173,27 @@ class MainViewModel(
             .take(100)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _automixRefreshSalt = MutableStateFlow(0L)
+
+    private val automixEffectiveDayFlow: Flow<Long> = combine(
+        flow {
+            while (currentCoroutineContext().isActive) {
+                emit(SmartMixGenerator.currentDayEpoch())
+                delay(60_000L)
+            }
+        }.distinctUntilChanged(),
+        _automixRefreshSalt
+    ) { epochDay, salt ->
+        if (salt != 0L) epochDay xor salt else epochDay
+    }.distinctUntilChanged()
+
     val automixVibeSets: StateFlow<Map<AutomixVibe, List<Song>>> = combine(
         activeSongs,
         playerManager.libraryAnalysis,
-        playStats
-    ) { songs, _, stats ->
+        playStats,
+        settings,
+        automixEffectiveDayFlow
+    ) { songs, _, stats, userSettings, effectiveDay ->
         if (songs.isEmpty()) emptyMap()
         else {
             AutomixVibe.entries.associateWith { vibe ->
@@ -179,7 +201,9 @@ class MainViewModel(
                     vibe = vibe,
                     allSongs = songs,
                     analysisProvider = { playerManager.getCachedAnalysis(it) },
-                    playStats = stats
+                    playStats = stats,
+                    maxTracks = userSettings.automixPlaylistSize,
+                    dayEpoch = effectiveDay
                 )
             }
         }
@@ -206,6 +230,7 @@ class MainViewModel(
     fun cancelLibraryAnalysis() = playerManager.cancelLibraryAnalysis()
 
     fun updateTransitionDuration(durationSec: Int) = settingsRepository.updateTransitionDuration(durationSec)
+    fun updateAutomixPlaylistSize(size: Int) = settingsRepository.updateAutomixPlaylistSize(size)
     fun updateHarmonicMixingStrict(enabled: Boolean) = settingsRepository.updateHarmonicMixingStrict(enabled)
     fun updateAvoidVocalClash(enabled: Boolean) = settingsRepository.updateAvoidVocalClash(enabled)
     fun updateEnergyMatching(enabled: Boolean) = settingsRepository.updateEnergyMatching(enabled)
@@ -346,10 +371,27 @@ class MainViewModel(
             vibe = vibe,
             allSongs = _rawSongs.value,
             analysisProvider = { playerManager.getCachedAnalysis(it) },
-            playStats = playStats.value
+            playStats = playStats.value,
+            maxTracks = settings.value.automixPlaylistSize,
+            dayEpoch = SmartMixGenerator.currentDayEpoch()
         )
         triggerMicroAnalysisIfNeeded(songs.size)
         _playlistViewTarget.value = PlaylistViewTarget.AutomixSet(vibe, songs)
+    }
+
+    fun refreshAutomixSet(vibe: AutomixVibe) {
+        val newSalt = System.currentTimeMillis()
+        _automixRefreshSalt.value = newSalt
+        val effectiveDay = SmartMixGenerator.currentDayEpoch() xor newSalt
+        val refreshed = SmartMixGenerator.generateVibeMix(
+            vibe = vibe,
+            allSongs = _rawSongs.value,
+            analysisProvider = { playerManager.getCachedAnalysis(it) },
+            playStats = playStats.value,
+            maxTracks = settings.value.automixPlaylistSize,
+            dayEpoch = effectiveDay
+        )
+        _playlistViewTarget.value = PlaylistViewTarget.AutomixSet(vibe, refreshed)
     }
 
     fun playAutomixSet(vibe: AutomixVibe, songs: List<Song>? = null) {
@@ -357,7 +399,9 @@ class MainViewModel(
             vibe = vibe,
             allSongs = _rawSongs.value,
             analysisProvider = { playerManager.getCachedAnalysis(it) },
-            playStats = playStats.value
+            playStats = playStats.value,
+            maxTracks = settings.value.automixPlaylistSize,
+            dayEpoch = SmartMixGenerator.currentDayEpoch()
         )
         if (listToPlay.isEmpty()) return
         triggerMicroAnalysisIfNeeded(listToPlay.size)
@@ -373,7 +417,9 @@ class MainViewModel(
                 seedSong = seedSong,
                 allSongs = _rawSongs.value,
                 analysisProvider = { playerManager.getCachedAnalysis(it) },
-                playStats = playStats.value
+                playStats = playStats.value,
+                maxTracks = settings.value.automixPlaylistSize,
+                dayEpoch = SmartMixGenerator.currentDayEpoch()
             )
             triggerMicroAnalysisIfNeeded(mix.size)
             playerManager.setAutomixMode(AutomixMode.AUTO_DJ)
@@ -407,7 +453,9 @@ class MainViewModel(
                 seedSong = seedSong,
                 allSongs = songs,
                 analysisProvider = { playerManager.getCachedAnalysis(it) },
-                playStats = playStats.value
+                playStats = playStats.value,
+                maxTracks = settings.value.automixPlaylistSize,
+                dayEpoch = SmartMixGenerator.currentDayEpoch()
             )
 
             val mixIds = mix.map { it.id }.toSet()
@@ -456,7 +504,9 @@ class MainViewModel(
                                 seedSong = seedSong,
                                 allSongs = _rawSongs.value,
                                 analysisProvider = { playerManager.getCachedAnalysis(it) },
-                                playStats = playStats.value
+                                playStats = playStats.value,
+                                maxTracks = settings.value.automixPlaylistSize,
+                                dayEpoch = SmartMixGenerator.currentDayEpoch()
                             )
                         } else null
                     }
@@ -466,7 +516,9 @@ class MainViewModel(
                             vibe = vibe,
                             allSongs = _rawSongs.value,
                             analysisProvider = { playerManager.getCachedAnalysis(it) },
-                            playStats = playStats.value
+                            playStats = playStats.value,
+                            maxTracks = settings.value.automixPlaylistSize,
+                            dayEpoch = SmartMixGenerator.currentDayEpoch()
                         )
                     }
                     else -> null
@@ -485,7 +537,7 @@ class MainViewModel(
                 val idMap = _rawSongs.value.associateBy { it.id }
                 songs = trackIds.mapNotNull { idMap[it] }
             }
-            _playlistViewTarget.value = PlaylistViewTarget.Custom(playlist, songs)
+            _playlistViewTarget.value = PlaylistViewTarget.Custom(playlist.copy(trackCount = songs.size), songs)
         }
     }
 

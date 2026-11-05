@@ -179,4 +179,68 @@ class SmartMixGeneratorTest {
         assertEquals(3, mix.size)
         assertEquals(42L, mix.first().id)
     }
+
+    @Test
+    fun testPlaylistSizeConfigurable() {
+        val songs = (1..60).map { mockSong(it.toLong(), "Track $it", "Artist $it") }
+        val analyses = songs.associate { it.id to mockAnalysis(it.id, bpm = 125f, energy = 0.8f) }
+
+        val mix25 = SmartMixGenerator.generateVibeMix(
+            AutomixVibe.HIGH_ENERGY,
+            songs,
+            { analyses[it] },
+            maxTracks = 25,
+            dayEpoch = 0L
+        )
+        val mix50 = SmartMixGenerator.generateVibeMix(
+            AutomixVibe.HIGH_ENERGY,
+            songs,
+            { analyses[it] },
+            maxTracks = 50,
+            dayEpoch = 0L
+        )
+
+        assertEquals(25, mix25.size)
+        assertEquals(50, mix50.size)
+    }
+
+    @Test
+    fun testDailyRotationProducesStableSameDayAndVariedNextDay() {
+        val songs = (1..30).map { mockSong(it.toLong(), "Track $it", "Artist $it") }
+        val analyses = songs.associate { it.id to mockAnalysis(it.id, bpm = 125f, energy = 0.8f) }
+
+        // Day 1
+        val day1MixA = SmartMixGenerator.generateVibeMix(
+            AutomixVibe.HIGH_ENERGY,
+            songs,
+            { analyses[it] },
+            maxTracks = 15,
+            dayEpoch = 20000L
+        )
+        val day1MixB = SmartMixGenerator.generateVibeMix(
+            AutomixVibe.HIGH_ENERGY,
+            songs,
+            { analyses[it] },
+            maxTracks = 15,
+            dayEpoch = 20000L
+        )
+
+        // Day 2
+        val day2Mix = SmartMixGenerator.generateVibeMix(
+            AutomixVibe.HIGH_ENERGY,
+            songs,
+            { analyses[it] },
+            maxTracks = 15,
+            dayEpoch = 20001L
+        )
+
+        // Stability on same day
+        assertEquals(day1MixA.map { it.id }, day1MixB.map { it.id })
+
+        // Variation across different days
+        val day1Ids = day1MixA.map { it.id }
+        val day2Ids = day2Mix.map { it.id }
+        // Either starter track rotated or track order varied
+        assertFalse("Day 1 and Day 2 should differ in starter track or sequence order", day1Ids == day2Ids)
+    }
 }

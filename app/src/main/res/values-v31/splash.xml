@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Sona.Starting" parent="Theme.Sona">
+        <item name="android:windowSplashScreenBackground">@color/sona_splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/sona_splash_animated</item>
+        <item name="android:windowSplashScreenAnimationDuration">600</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/sona_splash_background</item>
+        <item name="android:statusBarColor">@color/sona_splash_background</item>
+        <item name="android:navigationBarColor">@color/sona_splash_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

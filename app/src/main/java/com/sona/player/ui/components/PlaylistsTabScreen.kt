@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Nightlife
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material.icons.rounded.Update
@@ -90,6 +91,7 @@ fun PlaylistsTabScreen(
     onOpenAutomixSet: (AutomixVibe) -> Unit = {},
     onPlayAutomixSet: (AutomixVibe, List<Song>) -> Unit = { _, _ -> },
     onSaveAutomixSetAsPlaylist: (AutomixVibe, List<Song>) -> Unit = { _, _ -> },
+    onRefreshAutomixSet: (AutomixVibe) -> Unit = {},
     onOpenCustomPlaylist: (Playlist) -> Unit,
     onBackToRoot: () -> Unit,
     onCreatePlaylistClick: () -> Unit,
@@ -210,7 +212,8 @@ fun PlaylistsTabScreen(
                 onPlaySong = { song -> onPlaySong(song, currentView.songs) },
                 onTrackOptionsClick = onTrackOptionsClick,
                 isSmart = true,
-                onSaveAsPlaylist = { onSaveAutomixSetAsPlaylist(vibe, currentView.songs) }
+                onSaveAsPlaylist = { onSaveAutomixSetAsPlaylist(vibe, currentView.songs) },
+                onRefreshMix = { onRefreshAutomixSet(vibe) }
             )
         }
     }
@@ -542,7 +545,8 @@ private fun PlaylistDetailView(
     onTrackOptionsClick: (Song) -> Unit,
     onRemoveTrack: ((Song) -> Unit)? = null,
     isSmart: Boolean = false,
-    onSaveAsPlaylist: (() -> Unit)? = null
+    onSaveAsPlaylist: (() -> Unit)? = null,
+    onRefreshMix: (() -> Unit)? = null
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         // Top navigation bar with Back button and playlist info
@@ -603,6 +607,16 @@ private fun PlaylistDetailView(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            if (onRefreshMix != null) {
+                IconButton(onClick = onRefreshMix) {
+                    Icon(
+                        imageVector = Icons.Rounded.Refresh,
+                        contentDescription = stringResource(R.string.automix_refresh_action),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
             }
 
             if (onSaveAsPlaylist != null) {
@@ -847,7 +861,7 @@ private fun AutomixSetCard(
                         color = accentColor.copy(alpha = 0.22f)
                     ) {
                         Text(
-                            text = "DJ MIX",
+                            text = stringResource(R.string.automix_daily_badge),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
                             color = accentColor,
