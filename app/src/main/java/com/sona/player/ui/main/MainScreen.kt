@@ -123,6 +123,8 @@ fun MainScreen(
     val artists by viewModel.artists.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val rawSongs by viewModel.rawSongs.collectAsState()
+    val currentLyrics by viewModel.currentLyrics.collectAsState()
+    val isLyricsLoading by viewModel.isLyricsLoading.collectAsState()
 
     // Dialog & Options states
     val trackForOptions by viewModel.trackForOptions.collectAsState()
@@ -339,6 +341,8 @@ fun MainScreen(
                     onUpdateUseArtworkPalette = { viewModel.updateUseArtworkPalette(it) },
                     onUpdateShowPlayerDiagnostics = { viewModel.updateShowPlayerDiagnostics(it) },
                     onUpdateExpressiveAnimations = { viewModel.updateExpressiveAnimations(it) },
+                    onUpdateFetchOnlineLyrics = { viewModel.updateFetchOnlineLyrics(it) },
+                    onUpdateLyricsWifiOnly = { viewModel.updateLyricsWifiOnly(it) },
                     onResetSettings = { viewModel.resetSettings() },
                     onStartAnalysis = { force -> viewModel.startLibraryAnalysis(force) },
                     onCancelAnalysis = { viewModel.cancelLibraryAnalysis() },
@@ -623,6 +627,12 @@ fun MainScreen(
             onRemoveQueueItem = { viewModel.removeFromQueue(it) },
             onSeek = { viewModel.seekTo(it) },
             onDismiss = { isNowPlayingExpanded = false },
+            lyrics = currentLyrics,
+            isLyricsLoading = isLyricsLoading,
+            onLyricsOffsetChange = { viewModel.updateLyricsOffset(it) },
+            onResetLyricsOffset = { viewModel.resetLyricsOffset() },
+            onSearchOnlineLyrics = { viewModel.searchOnlineLyrics(it) },
+            onApplyManualLyrics = { viewModel.applyManualLyrics(it) },
             onSaveQueueAsPlaylist = {
                 val song = playerState.currentSong
                 val queue = playerState.currentQueue

@@ -233,4 +233,26 @@
     <string name="player_diagnostics_no_analysis">Збережений аналіз відсутній</string>
     <string name="player_diagnostics_loading_format">Завантаження аудіоформату…</string>
     <string name="player_diagnostics_format_unavailable">Аудіоформат недоступний</string>
+
+    <!-- Synchronized Lyrics -->
+    <string name="action_lyrics">Текст</string>
+    <string name="lyrics_not_found">Текст пісні відсутній</string>
+    <string name="lyrics_searching">Пошук тексту…</string>
+    <string name="lyrics_source_local">Локальний файл</string>
+    <string name="lyrics_source_embedded">Вбудований тег</string>
+    <string name="lyrics_source_online">LRCLIB</string>
+    <string name="lyrics_source_manual">Ручний пошук</string>
+    <string name="lyrics_offset_adjust">Синхронізація</string>
+    <string name="lyrics_offset_ms">%+d мс</string>
+    <string name="lyrics_offset_reset">Скинути</string>
+    <string name="lyrics_manual_search">Знайти текст онлайн</string>
+    <string name="lyrics_search_hint">Назва треку або виконавець…</string>
+    <string name="lyrics_search_no_results">Нічого не знайдено</string>
+    <string name="lyrics_tap_to_seek">Натисніть на рядок для переходу</string>
+    <string name="lyrics_jump_to_current">До поточного рядка</string>
+    <string name="settings_cat_lyrics_title">Синхронізовані тексти</string>
+    <string name="settings_lyrics_online_title">Завантажувати тексти з інтернету</string>
+    <string name="settings_lyrics_online_desc">Автоматично шукати синхронізовані тексти у LRCLIB за відсутності локальних файлів</string>
+    <string name="settings_lyrics_wifi_only_title">Лише через Wi-Fi</string>
+    <string name="settings_lyrics_wifi_only_desc">Заощаджувати мобільний трафік, завантажуючи тексти лише через Wi-Fi</string>
 </resources>

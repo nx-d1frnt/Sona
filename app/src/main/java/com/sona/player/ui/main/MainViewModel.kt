@@ -21,6 +21,9 @@ import com.sona.player.data.repository.UserLibraryRepository
 import com.sona.player.data.repository.UserSettings
 import com.sona.player.playback.MusicPlayerManager
 import com.sona.player.playback.PlayerState
+import com.sona.player.lyrics.model.TrackLyrics
+import com.sona.player.lyrics.network.LrclibResponse
+import com.sona.player.lyrics.repository.LyricsRepository
 import com.sona.player.ui.components.ArtistAlbumViewTarget
 import com.sona.player.ui.components.PlaylistViewTarget
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +37,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -56,12 +60,48 @@ class MainViewModel(
     private val repository: AudioRepository,
     private val userLibraryRepository: UserLibraryRepository,
     private val playerManager: MusicPlayerManager,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val lyricsRepository: LyricsRepository
 ) : ViewModel() {
 
     val settings: StateFlow<UserSettings> = settingsRepository.settings
 
     val playerState: StateFlow<PlayerState> = playerManager.playerState
+
+    // Active lyrics song switches at 50% midpoint of Automix transitions
+    val activeLyricsSong: StateFlow<Song?> = playerState.map { state ->
+        if (state.automix.isTransitioning && state.automix.transitionProgress >= 0.5f && state.automix.transitionTargetSong != null) {
+            state.automix.transitionTargetSong
+        } else {
+            state.currentSong
+        }
+    }.distinctUntilChanged().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    private val _currentLyrics = MutableStateFlow<TrackLyrics?>(null)
+    val currentLyrics: StateFlow<TrackLyrics?> = _currentLyrics.asStateFlow()
+
+    private val _isLyricsLoading = MutableStateFlow(false)
+    val isLyricsLoading: StateFlow<Boolean> = _isLyricsLoading.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            activeLyricsSong.collect { song ->
+                if (song == null) {
+                    _currentLyrics.value = null
+                    _isLyricsLoading.value = false
+                } else {
+                    _isLyricsLoading.value = true
+                    try {
+                        _currentLyrics.value = lyricsRepository.getLyricsForSong(song)
+                    } catch (_: Exception) {
+                        _currentLyrics.value = null
+                    } finally {
+                        _isLyricsLoading.value = false
+                    }
+                }
+            }
+        }
+    }
 
     private val _rawSongs = MutableStateFlow<List<Song>>(emptyList())
     val rawSongs: StateFlow<List<Song>> = _rawSongs.asStateFlow()
@@ -244,6 +284,43 @@ class MainViewModel(
     fun updateUseDynamicMonet(enabled: Boolean) = settingsRepository.updateUseDynamicMonet(enabled)
     fun updateUseArtworkPalette(enabled: Boolean) = settingsRepository.updateUseArtworkPalette(enabled)
     fun updateShowPlayerDiagnostics(enabled: Boolean) = settingsRepository.updateShowPlayerDiagnostics(enabled)
+
+    fun updateFetchOnlineLyrics(enabled: Boolean) = settingsRepository.updateFetchOnlineLyrics(enabled)
+    fun updateLyricsWifiOnly(wifiOnly: Boolean) = settingsRepository.updateLyricsWifiOnly(wifiOnly)
+
+    fun updateLyricsOffset(deltaMs: Long) {
+        val lyrics = _currentLyrics.value ?: return
+        val newOffset = lyrics.userOffsetMs + deltaMs
+        _currentLyrics.value = lyrics.copy(userOffsetMs = newOffset)
+        viewModelScope.launch {
+            lyricsRepository.updateOffset(lyrics.songId, newOffset)
+        }
+    }
+
+    fun resetLyricsOffset() {
+        val lyrics = _currentLyrics.value ?: return
+        _currentLyrics.value = lyrics.copy(userOffsetMs = 0L)
+        viewModelScope.launch {
+            lyricsRepository.updateOffset(lyrics.songId, 0L)
+        }
+    }
+
+    suspend fun searchOnlineLyrics(query: String): List<LrclibResponse> {
+        return lyricsRepository.searchOnlineLyrics(query)
+    }
+
+    fun applyManualLyrics(response: LrclibResponse) {
+        val currentSong = activeLyricsSong.value ?: return
+        viewModelScope.launch {
+            _isLyricsLoading.value = true
+            try {
+                val parsed = lyricsRepository.applyManualLyrics(currentSong.id, response)
+                _currentLyrics.value = parsed
+            } finally {
+                _isLyricsLoading.value = false
+            }
+        }
+    }
 
     fun updateExpressiveAnimations(enabled: Boolean) = settingsRepository.updateExpressiveAnimations(enabled)
     fun resetSettings() = settingsRepository.resetToDefaults()

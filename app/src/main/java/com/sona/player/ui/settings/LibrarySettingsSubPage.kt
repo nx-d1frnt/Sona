@@ -19,7 +19,9 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedFilterChip
@@ -60,7 +62,9 @@ fun LibrarySettingsSubPage(
     settings: UserSettings,
     allSongs: List<Song>,
     onToggleFolderBlacklist: (String, Boolean) -> Unit,
-    onUpdateArtistSeparators: (List<String>) -> Unit
+    onUpdateArtistSeparators: (List<String>) -> Unit,
+    onUpdateFetchOnlineLyrics: (Boolean) -> Unit = {},
+    onUpdateLyricsWifiOnly: (Boolean) -> Unit = {}
 ) {
     var showAddFolderDialog by remember { mutableStateOf(false) }
     var customFolderPath by remember { mutableStateOf("") }
@@ -92,6 +96,29 @@ fun LibrarySettingsSubPage(
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Synchronized Lyrics Settings Group
+        ExpressiveSettingsGroup(title = stringResource(R.string.settings_cat_lyrics_title)) {
+            ExpressiveSwitchItem(
+                title = stringResource(R.string.settings_lyrics_online_title),
+                subtitle = stringResource(R.string.settings_lyrics_online_desc),
+                icon = Icons.Rounded.Language,
+                checked = settings.fetchOnlineLyrics,
+                onCheckedChange = onUpdateFetchOnlineLyrics,
+                position = if (settings.fetchOnlineLyrics) ConnectedPosition.Top else ConnectedPosition.Single
+            )
+
+            if (settings.fetchOnlineLyrics) {
+                ExpressiveSwitchItem(
+                    title = stringResource(R.string.settings_lyrics_wifi_only_title),
+                    subtitle = stringResource(R.string.settings_lyrics_wifi_only_desc),
+                    icon = Icons.Rounded.Wifi,
+                    checked = settings.lyricsWifiOnly,
+                    onCheckedChange = onUpdateLyricsWifiOnly,
+                    position = ConnectedPosition.Bottom
+                )
+            }
+        }
+
         // Blacklist Folders Group
         ExpressiveSettingsGroup(title = stringResource(R.string.settings_library_blacklist_title)) {
             Surface(

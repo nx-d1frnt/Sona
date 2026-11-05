@@ -55,7 +55,11 @@ data class UserSettings(
     val useDynamicMonet: Boolean = true,
     val useArtworkPalette: Boolean = true,
     val showPlayerDiagnostics: Boolean = false,
-    val expressiveAnimations: Boolean = true
+    val expressiveAnimations: Boolean = true,
+
+    // Lyrics settings
+    val fetchOnlineLyrics: Boolean = true,
+    val lyricsWifiOnly: Boolean = false
 )
 
 class SettingsRepository(private val context: Context) {
@@ -82,6 +86,9 @@ class SettingsRepository(private val context: Context) {
         val USE_ARTWORK_PALETTE = booleanPreferencesKey("appearance_use_artwork_palette")
         val SHOW_PLAYER_DIAGNOSTICS = booleanPreferencesKey("appearance_player_diagnostics")
         val EXPRESSIVE_ANIMATIONS = booleanPreferencesKey("appearance_expressive_animations")
+
+        val FETCH_ONLINE_LYRICS = booleanPreferencesKey("lyrics_fetch_online")
+        val LYRICS_WIFI_ONLY = booleanPreferencesKey("lyrics_wifi_only")
     }
 
     private val defaultSeparators = listOf(", ", " & ", " feat. ", " ft. ", " / ", "; ")
@@ -125,9 +132,14 @@ class SettingsRepository(private val context: Context) {
                 useDynamicMonet = prefs[PreferencesKeys.USE_DYNAMIC_MONET] ?: true,
                 useArtworkPalette = prefs[PreferencesKeys.USE_ARTWORK_PALETTE] ?: true,
                 showPlayerDiagnostics = prefs[PreferencesKeys.SHOW_PLAYER_DIAGNOSTICS] ?: false,
-                expressiveAnimations = prefs[PreferencesKeys.EXPRESSIVE_ANIMATIONS] ?: true
+                expressiveAnimations = prefs[PreferencesKeys.EXPRESSIVE_ANIMATIONS] ?: true,
+                fetchOnlineLyrics = prefs[PreferencesKeys.FETCH_ONLINE_LYRICS] ?: true,
+                lyricsWifiOnly = prefs[PreferencesKeys.LYRICS_WIFI_ONLY] ?: false
             )
         }
+
+    val fetchOnlineLyricsFlow: Flow<Boolean> = settingsFlow.map { it.fetchOnlineLyrics }
+    val lyricsWifiOnlyFlow: Flow<Boolean> = settingsFlow.map { it.lyricsWifiOnly }
 
     val settings: StateFlow<UserSettings> = settingsFlow.stateIn(
         scope = scope,
@@ -285,10 +297,37 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    fun updateFetchOnlineLyrics(enabled: Boolean) {
+        scope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.FETCH_ONLINE_LYRICS] = enabled
+            }
+        }
+    }
+
+    fun updateLyricsWifiOnly(wifiOnly: Boolean) {
+        scope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.LYRICS_WIFI_ONLY] = wifiOnly
+            }
+        }
+    }
+
     fun resetToDefaults() {
         scope.launch {
             context.dataStore.edit { prefs ->
                 prefs.clear()
+            }
+        }
+    }
+
+    companion object {
+        @Volatile
+        private var instance: SettingsRepository? = null
+
+        fun getInstance(context: Context): SettingsRepository {
+            return instance ?: synchronized(this) {
+                instance ?: SettingsRepository(context.applicationContext).also { instance = it }
             }
         }
     }

@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
@@ -96,6 +97,8 @@ import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixTransitionState
 import com.sona.player.automix.ShuffleMode
 import com.sona.player.data.model.Song
+import com.sona.player.lyrics.model.TrackLyrics
+import com.sona.player.lyrics.network.LrclibResponse
 import com.sona.player.ui.theme.rememberArtworkPalette
 import kotlin.math.roundToInt
 
@@ -130,6 +133,12 @@ fun NowPlayingScreen(
     onSeek: (Long) -> Unit,
     onDismiss: () -> Unit,
     onSaveQueueAsPlaylist: (() -> Unit)? = null,
+    lyrics: TrackLyrics? = null,
+    isLyricsLoading: Boolean = false,
+    onLyricsOffsetChange: (Long) -> Unit = {},
+    onResetLyricsOffset: () -> Unit = {},
+    onSearchOnlineLyrics: (suspend (String) -> List<LrclibResponse>)? = null,
+    onApplyManualLyrics: ((LrclibResponse) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (song == null) return
@@ -140,6 +149,8 @@ fun NowPlayingScreen(
     val targetPalette = rememberArtworkPalette(targetTrack?.albumArtUri)
 
     var isQueueSheetOpen by remember { mutableStateOf(false) }
+    var isLyricsOpen by remember { mutableStateOf(false) }
+    var showManualSearchDialog by remember { mutableStateOf(false) }
     var isUserSeeking by remember { mutableFloatStateOf(-1f) }
 
     val rawProgress = if (durationMs > 0) {
@@ -191,9 +202,28 @@ fun NowPlayingScreen(
         label = "AutomixZoneFraction"
     )
 
+    // Animated blur, scale, and scrim for lyrics view entry
+    val lyricsBlurRadius by animateDpAsState(
+        targetValue = if (isLyricsOpen) 36.dp else 0.dp,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "LyricsBlurRadius"
+    )
+    val lyricsArtScale by animateFloatAsState(
+        targetValue = if (isLyricsOpen) 1.08f else 1.0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "LyricsArtScale"
+    )
+    val lyricsScrimAlpha by animateFloatAsState(
+        targetValue = if (isLyricsOpen) 0.55f else 0.0f,
+        animationSpec = tween(durationMillis = 350),
+        label = "LyricsScrimAlpha"
+    )
+
     BackHandler(onBack = {
         if (isQueueSheetOpen) {
             isQueueSheetOpen = false
+        } else if (isLyricsOpen) {
+            isLyricsOpen = false
         } else {
             onDismiss()
         }
@@ -220,7 +250,10 @@ fun NowPlayingScreen(
                     model = targetArtUri,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .scale(lyricsArtScale)
+                        .then(if (lyricsBlurRadius > 0.dp) Modifier.blur(lyricsBlurRadius) else Modifier)
                 )
             } else {
                 Box(
@@ -301,6 +334,15 @@ fun NowPlayingScreen(
                 )
         )
 
+        // 5. Полноэкранный темный ским при открытии текста песни
+        if (lyricsScrimAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = lyricsScrimAlpha))
+            )
+        }
+
         // 3. UI элементы
         Column(
             modifier = Modifier
@@ -336,12 +378,42 @@ fun NowPlayingScreen(
                     modifier = Modifier.weight(1f)
                 )
 
-                Spacer(modifier = Modifier.size(48.dp))
+                // Lyrics toggle button in header
+                FilledIconToggleButton(
+                    checked = isLyricsOpen,
+                    onCheckedChange = { isLyricsOpen = it },
+                    colors = IconButtonDefaults.filledIconToggleButtonColors(
+                        containerColor = Color.White.copy(alpha = 0.14f),
+                        contentColor = Color.White,
+                        checkedContainerColor = palette.primaryAccent,
+                        checkedContentColor = palette.onPrimaryAccent
+                    ),
+                    shape = CircleShape,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Lyrics,
+                        contentDescription = androidx.compose.ui.res.stringResource(com.sona.player.R.string.action_lyrics),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            // Пространство для открытого просмотра полноэкранной обложки
+            // Пространство для открытого просмотра полноэкранной обложки или текста песни
             Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp)) {
-                if (showDiagnostics) {
+                if (isLyricsOpen) {
+                    LyricsView(
+                        lyrics = lyrics,
+                        isLoading = isLyricsLoading,
+                        currentPositionMs = currentPositionMs,
+                        palette = palette,
+                        onSeekTo = onSeek,
+                        onOffsetChange = onLyricsOffsetChange,
+                        onResetOffset = onResetLyricsOffset,
+                        onOpenManualSearch = { showManualSearchDialog = true },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (showDiagnostics) {
                     androidx.compose.runtime.key(song.id) {
                         PlayerTrackDiagnostics(
                             song = song,
@@ -781,6 +853,15 @@ fun NowPlayingScreen(
                     onSaveAsSmartPlaylist = onSaveQueueAsPlaylist
                 )
             }
+        }
+
+        if (showManualSearchDialog && onSearchOnlineLyrics != null && onApplyManualLyrics != null) {
+            LyricsManualSearchDialog(
+                initialQuery = "${song.title} ${song.artist}",
+                onDismissRequest = { showManualSearchDialog = false },
+                onSearch = onSearchOnlineLyrics,
+                onSelectLyrics = onApplyManualLyrics
+            )
         }
     }
 }

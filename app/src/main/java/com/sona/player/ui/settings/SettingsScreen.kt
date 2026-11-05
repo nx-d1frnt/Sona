@@ -65,6 +65,8 @@ fun SettingsScreen(
     onUpdateUseArtworkPalette: (Boolean) -> Unit,
     onUpdateShowPlayerDiagnostics: (Boolean) -> Unit,
     onUpdateExpressiveAnimations: (Boolean) -> Unit,
+    onUpdateFetchOnlineLyrics: (Boolean) -> Unit = {},
+    onUpdateLyricsWifiOnly: (Boolean) -> Unit = {},
     onResetSettings: () -> Unit,
     onStartAnalysis: (Boolean) -> Unit,
     onCancelAnalysis: () -> Unit,
@@ -191,7 +193,9 @@ fun SettingsScreen(
                                 settings = settings,
                                 allSongs = allSongs,
                                 onToggleFolderBlacklist = onToggleFolderBlacklist,
-                                onUpdateArtistSeparators = onUpdateArtistSeparators
+                                onUpdateArtistSeparators = onUpdateArtistSeparators,
+                                onUpdateFetchOnlineLyrics = onUpdateFetchOnlineLyrics,
+                                onUpdateLyricsWifiOnly = onUpdateLyricsWifiOnly
                             )
                         }
                         SettingsDestination.AUDIO_PLAYBACK -> {

@@ -55,13 +55,14 @@ class MainActivity : ComponentActivity() {
         val repository = AudioRepository(applicationContext)
         val userLibraryRepository = UserLibraryRepository(applicationContext)
         val settingsRepository = SettingsRepository(applicationContext)
+        val lyricsRepository = com.sona.player.lyrics.repository.LyricsRepository.getInstance(applicationContext)
         playerManager = MusicPlayerManager(applicationContext)
         playerManager.init()
 
         viewModel = ViewModelProvider(this, object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                return MainViewModel(repository, userLibraryRepository, playerManager, settingsRepository) as T
+                return MainViewModel(repository, userLibraryRepository, playerManager, settingsRepository, lyricsRepository) as T
             }
         })[MainViewModel::class.java]
 

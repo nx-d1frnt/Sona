@@ -85,6 +85,9 @@ dependencies {
     // Image loading
     implementation(libs.coil.compose)
 
+    // Networking
+    implementation(libs.okhttp)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.coroutines.guava)

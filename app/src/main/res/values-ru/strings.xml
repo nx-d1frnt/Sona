@@ -233,4 +233,26 @@
     <string name="player_diagnostics_no_analysis">Сохранённый анализ отсутствует</string>
     <string name="player_diagnostics_loading_format">Загрузка аудиоформата…</string>
     <string name="player_diagnostics_format_unavailable">Аудиоформат недоступен</string>
+
+    <!-- Synchronized Lyrics -->
+    <string name="action_lyrics">Текст песни</string>
+    <string name="lyrics_not_found">Текст песни отсутствует</string>
+    <string name="lyrics_searching">Поиск текста…</string>
+    <string name="lyrics_source_local">Локальный файл</string>
+    <string name="lyrics_source_embedded">Встроенный тег</string>
+    <string name="lyrics_source_online">LRCLIB</string>
+    <string name="lyrics_source_manual">Ручной поиск</string>
+    <string name="lyrics_offset_adjust">Синхронизация</string>
+    <string name="lyrics_offset_ms">%+d мс</string>
+    <string name="lyrics_offset_reset">Сброс</string>
+    <string name="lyrics_manual_search">Найти текст онлайн</string>
+    <string name="lyrics_search_hint">Название трека или исполнитель…</string>
+    <string name="lyrics_search_no_results">Ничего не найдено</string>
+    <string name="lyrics_tap_to_seek">Нажмите на строку для перехода</string>
+    <string name="lyrics_jump_to_current">К текущей строке</string>
+    <string name="settings_cat_lyrics_title">Синхронизированные тексты</string>
+    <string name="settings_lyrics_online_title">Загружать тексты из интернета</string>
+    <string name="settings_lyrics_online_desc">Автоматически искать синхронизированные тексты в LRCLIB при отсутствии локальных файлов</string>
+    <string name="settings_lyrics_wifi_only_title">Только по Wi-Fi</string>
+    <string name="settings_lyrics_wifi_only_desc">Экономить мобильный трафик, загружая тексты только по Wi-Fi</string>
 </resources>

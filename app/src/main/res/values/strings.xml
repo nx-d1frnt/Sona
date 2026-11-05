@@ -309,4 +309,26 @@
     <string name="player_diagnostics_no_analysis">No cached analysis available</string>
     <string name="player_diagnostics_loading_format">Loading audio format…</string>
     <string name="player_diagnostics_format_unavailable">Audio format unavailable</string>
+
+    <!-- Synchronized Lyrics -->
+    <string name="action_lyrics">Lyrics</string>
+    <string name="lyrics_not_found">No lyrics available</string>
+    <string name="lyrics_searching">Finding lyrics…</string>
+    <string name="lyrics_source_local">Local file</string>
+    <string name="lyrics_source_embedded">Embedded tag</string>
+    <string name="lyrics_source_online">LRCLIB</string>
+    <string name="lyrics_source_manual">Manual match</string>
+    <string name="lyrics_offset_adjust">Sync timing</string>
+    <string name="lyrics_offset_ms">%+d ms</string>
+    <string name="lyrics_offset_reset">Reset</string>
+    <string name="lyrics_manual_search">Search online lyrics</string>
+    <string name="lyrics_search_hint">Track name or artist…</string>
+    <string name="lyrics_search_no_results">No matching lyrics found</string>
+    <string name="lyrics_tap_to_seek">Tap any line to jump</string>
+    <string name="lyrics_jump_to_current">Jump to current</string>
+    <string name="settings_cat_lyrics_title">Synchronized Lyrics</string>
+    <string name="settings_lyrics_online_title">Download online lyrics</string>
+    <string name="settings_lyrics_online_desc">Automatically fetch synchronized lyrics from LRCLIB when no local lyrics exist</string>
+    <string name="settings_lyrics_wifi_only_title">Download over Wi-Fi only</string>
+    <string name="settings_lyrics_wifi_only_desc">Save mobile data by downloading lyrics only on Wi-Fi networks</string>
 </resources>
