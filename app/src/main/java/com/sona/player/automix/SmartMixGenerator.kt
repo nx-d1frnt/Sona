@@ -85,9 +85,9 @@ object SmartMixGenerator {
                 analysis.energy <= 0.45f && analysis.bpm <= 130f
             }
             AutomixVibe.INSTRUMENTAL -> {
-                val vocalRatio = vocalRatio(analysis)
+                val vocalRatio = analysis.vocalActivityRatio
                 val isTagInstrumental = isInstrumentalTitle(song.title)
-                (analysis.featureAnalysisAttempted && vocalRatio <= 0.15f) || isTagInstrumental
+                (vocalRatio != null && vocalRatio <= 0.15) || isTagInstrumental
             }
             AutomixVibe.NIGHT_DRIVE -> {
                 analysis.bpm in 98f..132f && analysis.energy in 0.42f..0.78f
@@ -104,19 +104,13 @@ object SmartMixGenerator {
                 analysis.energy <= 0.52f
             }
             AutomixVibe.INSTRUMENTAL -> {
-                val vocalRatio = vocalRatio(analysis)
-                (analysis.featureAnalysisAttempted && vocalRatio <= 0.28f) || isInstrumentalTitle(song.title)
+                val vocalRatio = analysis.vocalActivityRatio
+                (vocalRatio != null && vocalRatio <= 0.28) || isInstrumentalTitle(song.title)
             }
             AutomixVibe.NIGHT_DRIVE -> {
                 analysis.bpm in 90f..138f && analysis.energy in 0.35f..0.85f
             }
         }
-    }
-
-    private fun vocalRatio(analysis: TrackAnalysis): Float {
-        if (analysis.durationMs <= 0) return 0f
-        val vocalMs = analysis.vocalSections.filter { it.score >= 0.35f }.sumOf { it.endMs - it.startMs }
-        return vocalMs.toFloat() / analysis.durationMs.toFloat()
     }
 
     private fun isInstrumentalTitle(title: String): Boolean {

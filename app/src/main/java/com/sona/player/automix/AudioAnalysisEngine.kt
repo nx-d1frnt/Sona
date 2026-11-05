@@ -39,6 +39,13 @@ class AudioAnalysisEngine(private val context: Context) {
         vocalDetector = null
     }
 
+    // Creation, inference and release share a lock: service shutdown must not close
+    // either interpreter while a parallel track is still using it.
+    private suspend fun analyzeVocals(window: AudioWindow): List<VocalSection> = vocalDetectorMutex.withLock {
+        val detector = vocalDetector ?: YamnetVocalDetector(context).also { vocalDetector = it }
+        detector.analyze(window)
+    }
+
     private val windowDecoder = AudioWindowDecoder(context)
     private val memoryCache = ConcurrentHashMap<Long, TrackAnalysis>()
     private val cacheFile = File(context.filesDir, "sona_automix_analysis_v7.json")
@@ -57,16 +64,21 @@ class AudioAnalysisEngine(private val context: Context) {
 
     fun getAllCached(): Map<Long, TrackAnalysis> = Collections.unmodifiableMap(memoryCache)
 
-    fun needsAnalysis(songId: Long): Boolean = memoryCache[songId]?.isComplete != true
+    fun needsAnalysis(songId: Long): Boolean {
+        val cached = memoryCache[songId] ?: return true
+        return !cached.isComplete || !cached.hasCurrentVocalAnalysis
+    }
 
     suspend fun analyzeSong(song: Song, force: Boolean = false): TrackAnalysis {
-        memoryCache[song.id]?.takeIf { !force && it.isComplete }?.let { return it }
+        memoryCache[song.id]?.takeIf { !force && it.isComplete && it.hasCurrentVocalAnalysis }?.let { return it }
 
         val analysis = codecSemaphore.withPermit {
-            memoryCache[song.id]?.takeIf { !force && it.isComplete }?.let { return@withPermit it }
+            memoryCache[song.id]?.takeIf { !force && it.isComplete && it.hasCurrentVocalAnalysis }?.let { return@withPermit it }
             val existing = if (force) null else memoryCache[song.id]?.takeIf { it.featureAnalysisAttempted }
             withContext(Dispatchers.Default) {
-                withTimeoutOrNull(60_000L) {
+                // Shared model inference is serialized. Allow for the other in-flight
+                // tracks too; on slower devices a single vocal pass can take ~45s.
+                withTimeoutOrNull(90_000L * maxParallelDecoders) {
                     if (existing == null) decodeAndAnalyze(song) else enrichMissing(song, existing)
                 } ?: existing?.copy(loudnessAnalyzed = true, keyAnalyzed = true) ?: createFallbackAnalysis(song)
             }.also {
@@ -78,8 +90,8 @@ class AudioAnalysisEngine(private val context: Context) {
         return analysis
     }
 
-    // Extend older entries in place: cached beats/vocals survive and YAMNet is not run again.
-    // Only the passes that are missing (loudness and/or key) are computed from the decoded windows.
+    // Extend older entries in place: cached beats survive and stale/missing vocals are refreshed.
+    // Only the passes that are missing (loudness, key, and/or vocals) are computed from the decoded windows.
     private suspend fun enrichMissing(song: Song, existing: TrackAnalysis): TrackAnalysis {
         val duration = existing.durationMs
         val ranges = listOf(
@@ -98,6 +110,21 @@ class AudioAnalysisEngine(private val context: Context) {
             val frames = windows.sumOf { KeyDetector.accumulate(it, chroma) }
             val key = KeyDetector.estimate(chroma, frames)
             result = result.copy(keyIndex = key?.index ?: -1, keyConfidence = key?.confidence ?: 0f, keyAnalyzed = true)
+        }
+        if (!result.hasCurrentVocalAnalysis) {
+            val vocals = mutableListOf<VocalSection>()
+            try {
+                for (window in windows) {
+                    vocals += analyzeVocals(window)
+                }
+                if (vocals.isNotEmpty()) {
+                    result = result.copy(vocalSections = vocals, vocalAnalysisVersion = VocalActivity.VERSION)
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Throwable) {
+                android.util.Log.w("SonaAnalysis", "Failed to enrich vocals", failure)
+            }
         }
         return result
     }
@@ -135,10 +162,12 @@ class AudioAnalysisEngine(private val context: Context) {
 
         AnalysisPipeline.processStream(
             produce = { emit ->
-                val before = android.os.SystemClock.elapsedRealtime()
+                var before = android.os.SystemClock.elapsedRealtime()
                 windowDecoder.decodeWindows(song, windowRanges) { window ->
                     decodeMs += android.os.SystemClock.elapsedRealtime() - before
                     emit(window)
+                    // Waiting for the inference worker is not decoding time.
+                    before = android.os.SystemClock.elapsedRealtime()
                 }
             },
             consume = { window ->
@@ -156,10 +185,7 @@ class AudioAnalysisEngine(private val context: Context) {
                 val beforeVocals = android.os.SystemClock.elapsedRealtime()
                 if (classifierAvailable) {
                     try {
-                        val detector = vocalDetector ?: synchronized(this) {
-                            vocalDetector ?: YamnetVocalDetector(context).also { vocalDetector = it }
-                        }
-                        vocals += detector.analyze(window)
+                        vocals += analyzeVocals(window)
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {
                         throw cancelled
                     } catch (failure: Exception) {
@@ -607,6 +633,7 @@ class AudioAnalysisEngine(private val context: Context) {
                     durationMs = dur,
                     beatSections = readBeatSections(obj.optJSONArray("beats")),
                     vocalSections = readVocalSections(obj.optJSONArray("vocals")),
+                    vocalAnalysisVersion = 0, // Legacy scores came from YAMNet alone.
                     loudnessSections = readLoudnessSections(obj.optJSONArray("loudness")),
                     featureAnalysisAttempted = (obj.optInt("featuresVersion", 0) >= 1 ||
                         (obj.optJSONArray("vocals")?.length() ?: 0) > 0 ||

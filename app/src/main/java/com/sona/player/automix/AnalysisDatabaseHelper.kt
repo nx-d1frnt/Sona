@@ -19,7 +19,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
 ) {
     companion object {
         private const val DATABASE_NAME = "sona_automix_analysis.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 4
 
         private const val TABLE_NAME = "track_analysis"
         private const val COL_SONG_ID = "song_id"
@@ -36,6 +36,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
         private const val COL_LOUDNESS_ANALYZED = "loudness_analyzed"
         private const val COL_BEATS_JSON = "beats_json"
         private const val COL_VOCALS_JSON = "vocals_json"
+        private const val COL_VOCAL_VERSION = "vocal_version"
         private const val COL_LOUDNESS_JSON = "loudness_json"
         private const val COL_KEY_INDEX = "key_index"
         private const val COL_KEY_CONFIDENCE = "key_confidence"
@@ -60,6 +61,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
                 $COL_LOUDNESS_ANALYZED INTEGER NOT NULL,
                 $COL_BEATS_JSON TEXT,
                 $COL_VOCALS_JSON TEXT,
+                $COL_VOCAL_VERSION INTEGER NOT NULL DEFAULT 0,
                 $COL_LOUDNESS_JSON TEXT,
                 $COL_KEY_INDEX INTEGER NOT NULL DEFAULT -1,
                 $COL_KEY_CONFIDENCE REAL NOT NULL DEFAULT 0,
@@ -81,6 +83,15 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
             db.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN $COL_KEY_INDEX INTEGER NOT NULL DEFAULT -1")
             db.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN $COL_KEY_CONFIDENCE REAL NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN $COL_KEY_ANALYZED INTEGER NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 3) {
+            // Preserve other analysis while scheduling old YAMNet-only vocal data for enrichment.
+            db.execSQL("ALTER TABLE $TABLE_NAME ADD COLUMN $COL_VOCAL_VERSION INTEGER NOT NULL DEFAULT 0")
+        }
+        if (oldVersion < 4) {
+            // v4: improved key detection (spectral peak-picking and modern Temperley profiles).
+            // Re-analyze key for existing rows on their next enrichment pass.
+            db.execSQL("UPDATE $TABLE_NAME SET $COL_KEY_ANALYZED = 0, $COL_KEY_INDEX = -1, $COL_KEY_CONFIDENCE = 0")
         }
     }
 
@@ -147,6 +158,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
                     durationMs = dur,
                     beatSections = parseBeatsJson(it.getString(beatsJsonCol)),
                     vocalSections = parseVocalsJson(it.getString(vocalsJsonCol)),
+                    vocalAnalysisVersion = it.getInt(it.getColumnIndexOrThrow(COL_VOCAL_VERSION)),
                     loudnessSections = parseLoudnessJson(it.getString(loudnessJsonCol)),
                     featureAnalysisAttempted = it.getInt(featAttemptedCol) == 1,
                     loudnessAnalyzed = it.getInt(loudnessAnalyzedCol) == 1,
@@ -224,6 +236,7 @@ class AnalysisDatabaseHelper(context: Context) : SQLiteOpenHelper(
             put(COL_LOUDNESS_ANALYZED, if (analysis.loudnessAnalyzed) 1 else 0)
             put(COL_BEATS_JSON, beatsJson)
             put(COL_VOCALS_JSON, vocalsJson)
+            put(COL_VOCAL_VERSION, analysis.vocalAnalysisVersion)
             put(COL_LOUDNESS_JSON, loudnessJson)
             put(COL_KEY_INDEX, analysis.keyIndex)
             put(COL_KEY_CONFIDENCE, if (analysis.keyConfidence.isFinite()) analysis.keyConfidence else 0f)

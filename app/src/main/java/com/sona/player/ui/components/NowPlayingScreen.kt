@@ -113,6 +113,7 @@ fun NowPlayingScreen(
     currentIndex: Int = 0,
     automixState: AutomixTransitionState = AutomixTransitionState(),
     smartQueueUpdatedAtMs: Long = 0L,
+    showDiagnostics: Boolean = false,
     isFavorite: Boolean = false,
     onToggleFavorite: () -> Unit = {},
     onMoreClick: () -> Unit = {},
@@ -339,7 +340,27 @@ fun NowPlayingScreen(
             }
 
             // Пространство для открытого просмотра полноэкранной обложки
-            Spacer(modifier = Modifier.weight(1f))
+            Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp)) {
+                if (showDiagnostics) {
+                    androidx.compose.runtime.key(song.id) {
+                        PlayerTrackDiagnostics(
+                            song = song,
+                            analysis = activeTrackAnalysis,
+                            automix = automixState,
+                            plan = transitionPreview,
+                            displayedMixOutMs = displayedMixOutMs,
+                            positionMs = currentPositionMs,
+                            durationMs = durationMs,
+                            isPlaying = isPlaying,
+                            queueIndex = currentIndex,
+                            queueSize = queue.size,
+                            shuffleMode = shuffleMode,
+                            repeatMode = repeatMode,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
 
             // Блок информации о треке и кнопки действий (как в референсе: название слева, share/favorite справа)
             Column(

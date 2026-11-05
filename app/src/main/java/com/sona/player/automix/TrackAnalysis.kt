@@ -1,6 +1,7 @@
 package com.sona.player.automix
 
 import com.sona.player.data.model.Song
+import kotlin.math.roundToInt
 
 /**
  * Automix operating mode:
@@ -105,6 +106,7 @@ data class TrackAnalysis(
     val midMixConfidence: Float = 0f, // Heuristic strength of a sustained drop; 0 for fallback data
     val beatSections: List<BeatSection> = emptyList(),
     val vocalSections: List<VocalSection> = emptyList(),
+    val vocalAnalysisVersion: Int = VocalActivity.VERSION,
     val loudnessSections: List<LoudnessSection> = emptyList(),
     val featureAnalysisAttempted: Boolean = true,
     val loudnessAnalyzed: Boolean = false,
@@ -113,6 +115,19 @@ data class TrackAnalysis(
     val keyAnalyzed: Boolean = false   // Key pass attempted (a null key may still be a valid result)
 ) {
     val musicalKey: MusicalKey? get() = MusicalKey.fromIndex(keyIndex, keyConfidence)
+
+    /**
+     * Estimated percentage (0..100) of the analyzed track windows containing detected vocal activity,
+     * or null if vocal classification was not performed or produced no sections.
+     */
+    val vocalPercentage: Int?
+        get() = vocalActivityRatio?.let { (it * 100.0).roundToInt().coerceIn(0, 100) }
+
+    internal val vocalActivityRatio: Double?
+        get() = if (hasCurrentVocalAnalysis) VocalActivity.ratio(vocalSections, durationMs) else null
+
+    internal val hasCurrentVocalAnalysis: Boolean
+        get() = vocalAnalysisVersion == VocalActivity.VERSION && vocalSections.isNotEmpty()
 
     /** All analysis passes for the current schema have been attempted. */
     val isComplete: Boolean get() = loudnessAnalyzed && featureAnalysisAttempted && keyAnalyzed
@@ -234,7 +249,11 @@ data class TrackAnalysis(
         beatSections.filter { it.confidence >= 0.45f }
             .flatMap { section ->
                 val step = (bars * 4).coerceAtLeast(4)
-                section.beatsMs.filterIndexed { index, _ -> (index % step) == (section.downbeatPhase % step) }
+                section.beatsMs.filterIndexed { index, time ->
+                    val ordinal = if (section.bpm.isFinite() && section.bpm > 0)
+                        ((time - section.beatsMs.first()) * section.bpm / 60_000.0).roundToInt() else index
+                    (ordinal % step) == (section.downbeatPhase % step)
+                }
             }
             .distinct()
             .sorted()

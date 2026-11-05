@@ -100,6 +100,7 @@
     <string name="details_bpm">Tempo (BPM)</string>
     <string name="details_key">Musical key</string>
     <string name="details_energy">Track energy</string>
+    <string name="details_vocal_percentage">Vocal percentage</string>
     <string name="details_key_determining">Detecting…</string>
     <string name="details_file_path">File path</string>
     <string name="details_path_copied_toast">Path copied to clipboard</string>
@@ -190,6 +191,13 @@
     <string name="analysis_cancelled">Analysis stopped</string>
     <string name="analysis_completed">Analysis completed</string>
     <string name="analysis_progress_count">%1$d of %2$d</string>
+    <string name="analysis_eta">~%s remaining</string>
+    <string name="analysis_eta_less_than_minute">&lt; 1 min</string>
+    <string name="analysis_eta_minutes">%d min</string>
+    <string name="analysis_eta_hours">%d hr</string>
+    <string name="analysis_eta_hours_minutes">%1$d hr %2$d min</string>
+    <string name="settings_auto_analysis_charging_idle_title">Analyze when idle and charging</string>
+    <string name="settings_auto_analysis_charging_idle_desc">Automatically analyze unindexed tracks in the background when device is plugged in and screen is off</string>
     <string name="analysis_stop">Stop</string>
     <string name="analysis_recalculate_all">Reanalyze all tracks</string>
     <string name="analysis_start">Analyze library</string>
@@ -288,4 +296,12 @@
     <string name="settings_about_cache_cleared_toast">Analysis cache cleared</string>
     <string name="settings_about_reset_title">Reset All Settings</string>
     <string name="settings_about_reset_desc">Restore all preferences to factory defaults</string>
+
+    <string name="settings_player_diagnostics_title">Player diagnostics</string>
+    <string name="settings_player_diagnostics_desc">Show live playback state, vocal scores, cues, and measured track data in the player.</string>
+    <string name="player_diagnostics_title">Track diagnostics</string>
+    <string name="player_diagnostics_copy">Copy report</string>
+    <string name="player_diagnostics_no_analysis">No cached analysis available</string>
+    <string name="player_diagnostics_loading_format">Loading audio format…</string>
+    <string name="player_diagnostics_format_unavailable">Audio format unavailable</string>
 </resources>

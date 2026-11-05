@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BatteryChargingFull
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.GraphicEq
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.sona.player.R
+import com.sona.player.analysis.AnalysisEtaEstimator
 import com.sona.player.analysis.LibraryAnalysisState
 import com.sona.player.data.repository.UserSettings
 
@@ -57,6 +59,7 @@ fun AutomixSettingsSubPage(
     onUpdateHarmonicMixingStrict: (Boolean) -> Unit,
     onUpdateAvoidVocalClash: (Boolean) -> Unit,
     onUpdateEnergyMatching: (Boolean) -> Unit,
+    onUpdateAutoAnalyzeOnChargingIdle: (Boolean) -> Unit,
     onStartAnalysis: (Boolean) -> Unit,
     onCancelAnalysis: () -> Unit,
     context: Context,
@@ -186,11 +189,26 @@ fun AutomixSettingsSubPage(
 
                         Spacer(modifier = Modifier.height(4.dp))
 
-                        Text(
-                            text = stringResource(R.string.analysis_progress_count, analysisState.completed, analysisState.total),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.analysis_progress_count, analysisState.completed, analysisState.total),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            if (analysisState.running && analysisState.etaMillis != null && analysisState.etaMillis > 0L && !analysisState.waitingForPlayback) {
+                                Text(
+                                    text = stringResource(R.string.analysis_eta, AnalysisEtaEstimator.formatEta(context, analysisState.etaMillis)),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
 
                         Spacer(modifier = Modifier.height(14.dp))
                     }
@@ -243,6 +261,17 @@ fun AutomixSettingsSubPage(
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            ExpressiveSwitchItem(
+                title = stringResource(R.string.settings_auto_analysis_charging_idle_title),
+                subtitle = stringResource(R.string.settings_auto_analysis_charging_idle_desc),
+                icon = Icons.Rounded.BatteryChargingFull,
+                checked = settings.autoAnalyzeOnChargingIdle,
+                onCheckedChange = onUpdateAutoAnalyzeOnChargingIdle,
+                position = ConnectedPosition.Single
+            )
         }
 
         // Transition Duration

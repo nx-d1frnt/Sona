@@ -7,6 +7,7 @@ import com.sona.player.automix.AutomixMode
 import com.sona.player.automix.AutomixVibe
 import com.sona.player.automix.ShuffleMode
 import com.sona.player.automix.SmartMixGenerator
+import com.sona.player.automix.TrackAnalysis
 import com.sona.player.data.model.Album
 import com.sona.player.data.model.Artist
 import com.sona.player.data.model.Playlist
@@ -208,6 +209,7 @@ class MainViewModel(
     fun updateHarmonicMixingStrict(enabled: Boolean) = settingsRepository.updateHarmonicMixingStrict(enabled)
     fun updateAvoidVocalClash(enabled: Boolean) = settingsRepository.updateAvoidVocalClash(enabled)
     fun updateEnergyMatching(enabled: Boolean) = settingsRepository.updateEnergyMatching(enabled)
+    fun updateAutoAnalyzeOnChargingIdle(enabled: Boolean) = settingsRepository.updateAutoAnalyzeOnChargingIdle(enabled)
     fun toggleFolderBlacklist(folderPath: String, blacklisted: Boolean) = settingsRepository.setFolderBlacklisted(folderPath, blacklisted)
     fun updateArtistSeparators(separators: List<String>) = settingsRepository.updateArtistSeparators(separators)
     fun updateGaplessPlayback(enabled: Boolean) = settingsRepository.updateGaplessPlayback(enabled)
@@ -216,6 +218,8 @@ class MainViewModel(
     fun updateThemeMode(mode: ThemeMode) = settingsRepository.updateThemeMode(mode)
     fun updateUseDynamicMonet(enabled: Boolean) = settingsRepository.updateUseDynamicMonet(enabled)
     fun updateUseArtworkPalette(enabled: Boolean) = settingsRepository.updateUseArtworkPalette(enabled)
+    fun updateShowPlayerDiagnostics(enabled: Boolean) = settingsRepository.updateShowPlayerDiagnostics(enabled)
+
     fun updateExpressiveAnimations(enabled: Boolean) = settingsRepository.updateExpressiveAnimations(enabled)
     fun resetSettings() = settingsRepository.resetToDefaults()
 
@@ -378,6 +382,45 @@ class MainViewModel(
         }
     }
 
+    fun playQuickAutomix() {
+        val songs = _rawSongs.value
+        if (songs.isEmpty()) return
+
+        viewModelScope.launch {
+            val currentState = playerState.value
+            val current = currentState.currentSong
+
+            // If already playing a track from library and automix is off, seamlessly activate Automix & Smart DJ queue
+            if (currentState.isPlaying && current != null && !currentState.automix.isEnabled) {
+                playerManager.setAutomixMode(AutomixMode.AUTO_DJ)
+                playerManager.setShuffleMode(ShuffleMode.SMART)
+                triggerMicroAnalysisIfNeeded(songs.size)
+                return@launch
+            }
+
+            // Otherwise, start a fresh Quick Automix session
+            val seedSong = (if (currentState.isPlaying) null else current)?.takeIf { songs.any { s -> s.id == it.id } }
+                ?: mostPlayedSongs.value.firstOrNull()
+                ?: songs.random()
+
+            val mix = SmartMixGenerator.generateSeedMix(
+                seedSong = seedSong,
+                allSongs = songs,
+                analysisProvider = { playerManager.getCachedAnalysis(it) },
+                playStats = playStats.value
+            )
+
+            val mixIds = mix.map { it.id }.toSet()
+            val remaining = songs.filter { it.id !in mixIds }.shuffled()
+            val fullQueue = if (mix.isNotEmpty()) mix + remaining else songs.shuffled()
+
+            triggerMicroAnalysisIfNeeded(fullQueue.size)
+            playerManager.setAutomixMode(AutomixMode.AUTO_DJ)
+            playerManager.setShuffleMode(ShuffleMode.SMART)
+            playerManager.playQueue(fullQueue, 0)
+        }
+    }
+
     fun saveSmartMixAsPlaylist(name: String, smartType: String, seedSongId: Long? = null, songs: List<Song>) {
         viewModelScope.launch {
             userLibraryRepository.createSmartPlaylist(
@@ -475,10 +518,19 @@ class MainViewModel(
         _trackForOptions.value = null
     }
 
+    fun getCachedAnalysis(songId: Long): TrackAnalysis? = playerManager.getCachedAnalysis(songId)
+
     fun showTrackDetails(context: Context, song: Song) {
         viewModelScope.launch {
             val details = TrackAudioDetails.extract(context, song)
             _trackDetails.value = details
+            if (playerManager.needsLibraryAnalysis(song.id)) {
+                launch(Dispatchers.Default) {
+                    try {
+                        playerManager.analyzeLibrarySong(song, force = false)
+                    } catch (_: Exception) {}
+                }
+            }
         }
     }
 

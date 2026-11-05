@@ -17,9 +17,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import com.sona.player.analysis.AutoAnalysisScheduler
 import java.io.IOException
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "sona_user_settings")
@@ -36,6 +38,7 @@ data class UserSettings(
     val harmonicMixingStrict: Boolean = true,
     val avoidVocalClash: Boolean = true,
     val energyMatching: Boolean = true,
+    val autoAnalyzeOnChargingIdle: Boolean = false,
 
     // Library settings
     val blacklistedFolders: Set<String> = emptySet(),
@@ -50,6 +53,7 @@ data class UserSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val useDynamicMonet: Boolean = true,
     val useArtworkPalette: Boolean = true,
+    val showPlayerDiagnostics: Boolean = false,
     val expressiveAnimations: Boolean = true
 )
 
@@ -62,6 +66,7 @@ class SettingsRepository(private val context: Context) {
         val HARMONIC_MIXING_STRICT = booleanPreferencesKey("automix_harmonic_mixing_strict")
         val AVOID_VOCAL_CLASH = booleanPreferencesKey("automix_avoid_vocal_clash")
         val ENERGY_MATCHING = booleanPreferencesKey("automix_energy_matching")
+        val AUTO_ANALYZE_ON_CHARGING_IDLE = booleanPreferencesKey("automix_auto_analyze_charging_idle")
 
         val BLACKLISTED_FOLDERS = stringSetPreferencesKey("library_blacklisted_folders")
         val ARTIST_SEPARATORS = stringPreferencesKey("library_artist_separators")
@@ -73,6 +78,7 @@ class SettingsRepository(private val context: Context) {
         val THEME_MODE = stringPreferencesKey("appearance_theme_mode")
         val USE_DYNAMIC_MONET = booleanPreferencesKey("appearance_use_dynamic_monet")
         val USE_ARTWORK_PALETTE = booleanPreferencesKey("appearance_use_artwork_palette")
+        val SHOW_PLAYER_DIAGNOSTICS = booleanPreferencesKey("appearance_player_diagnostics")
         val EXPRESSIVE_ANIMATIONS = booleanPreferencesKey("appearance_expressive_animations")
     }
 
@@ -106,6 +112,7 @@ class SettingsRepository(private val context: Context) {
                 harmonicMixingStrict = prefs[PreferencesKeys.HARMONIC_MIXING_STRICT] ?: true,
                 avoidVocalClash = prefs[PreferencesKeys.AVOID_VOCAL_CLASH] ?: true,
                 energyMatching = prefs[PreferencesKeys.ENERGY_MATCHING] ?: true,
+                autoAnalyzeOnChargingIdle = prefs[PreferencesKeys.AUTO_ANALYZE_ON_CHARGING_IDLE] ?: false,
                 blacklistedFolders = prefs[PreferencesKeys.BLACKLISTED_FOLDERS] ?: emptySet(),
                 artistSeparators = separators,
                 gaplessPlayback = prefs[PreferencesKeys.GAPLESS_PLAYBACK] ?: true,
@@ -114,6 +121,7 @@ class SettingsRepository(private val context: Context) {
                 themeMode = themeMode,
                 useDynamicMonet = prefs[PreferencesKeys.USE_DYNAMIC_MONET] ?: true,
                 useArtworkPalette = prefs[PreferencesKeys.USE_ARTWORK_PALETTE] ?: true,
+                showPlayerDiagnostics = prefs[PreferencesKeys.SHOW_PLAYER_DIAGNOSTICS] ?: false,
                 expressiveAnimations = prefs[PreferencesKeys.EXPRESSIVE_ANIMATIONS] ?: true
             )
         }
@@ -123,6 +131,30 @@ class SettingsRepository(private val context: Context) {
         started = SharingStarted.Eagerly,
         initialValue = UserSettings()
     )
+
+    init {
+        scope.launch {
+            try {
+                val initial = settingsFlow.first()
+                if (initial.autoAnalyzeOnChargingIdle) {
+                    AutoAnalysisScheduler.schedule(context)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun updateAutoAnalyzeOnChargingIdle(enabled: Boolean) {
+        scope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.AUTO_ANALYZE_ON_CHARGING_IDLE] = enabled
+            }
+            if (enabled) {
+                AutoAnalysisScheduler.schedule(context)
+            } else {
+                AutoAnalysisScheduler.cancel(context)
+            }
+        }
+    }
 
     fun updateTransitionDuration(durationSec: Int) {
         scope.launch {
@@ -230,6 +262,14 @@ class SettingsRepository(private val context: Context) {
         scope.launch {
             context.dataStore.edit { prefs ->
                 prefs[PreferencesKeys.EXPRESSIVE_ANIMATIONS] = enabled
+            }
+        }
+    }
+
+    fun updateShowPlayerDiagnostics(enabled: Boolean) {
+        scope.launch {
+            context.dataStore.edit { prefs ->
+                prefs[PreferencesKeys.SHOW_PLAYER_DIAGNOSTICS] = enabled
             }
         }
     }

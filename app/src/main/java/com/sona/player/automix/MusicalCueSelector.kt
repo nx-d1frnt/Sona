@@ -7,6 +7,7 @@ import kotlin.math.min
 /** Conservative local cue selection: unknown vocals are never treated as silence. */
 internal object MusicalCueSelector {
     fun vocalRisk(track: TrackAnalysis, startMs: Long, endMs: Long): Float? {
+        if (!track.hasCurrentVocalAnalysis) return null
         if (endMs <= startMs) return null
         val relevant = track.vocalSections.filter { it.startMs < endMs && it.endMs > startMs && it.score.isFinite() }
         val boundaries = (listOf(startMs, endMs) + relevant.flatMap {

@@ -56,6 +56,7 @@ internal class AudioWindowDecoder(private val context: Context) {
         if (windowRanges.isEmpty()) return
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
+        var completedWindows = 0
         try {
             extractor.setDataSource(context, song.contentUri, null)
             val track = (0 until extractor.trackCount).firstOrNull {
@@ -79,6 +80,7 @@ internal class AudioWindowDecoder(private val context: Context) {
                     } catch (e: Exception) {
                         Log.w("SonaAnalysis", "Failed to seek/flush decoder, falling back to standalone decode", e)
                         onWindowReady(decode(song, startMs, durationMs))
+                        completedWindows++
                         continue
                     }
                 } else {
@@ -87,12 +89,13 @@ internal class AudioWindowDecoder(private val context: Context) {
 
                 val window = decodeSingleWindow(decoder, extractor, startMs, durationMs)
                 onWindowReady(window)
+                completedWindows++
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             Log.w("SonaAnalysis", "Batch window decode failed, falling back to sequential decode", failure)
-            for ((startMs, durationMs) in windowRanges) {
+            for ((startMs, durationMs) in windowRanges.drop(completedWindows)) {
                 onWindowReady(decode(song, startMs, durationMs))
             }
         } finally {
@@ -114,7 +117,7 @@ internal class AudioWindowDecoder(private val context: Context) {
         var inputEnded = false
         var outputEnded = false
         val endUs = (startMs + durationMs) * 1000L
-        val deadline = SystemClock.elapsedRealtime() + 8000L
+        var deadline = SystemClock.elapsedRealtime() + 8000L
         while (!outputEnded) {
             currentCoroutineContext().ensureActive()
             check(SystemClock.elapsedRealtime() < deadline) { "Audio decoding timed out" }
@@ -124,7 +127,10 @@ internal class AudioWindowDecoder(private val context: Context) {
                     val buffer = requireNotNull(decoder.getInputBuffer(index))
                     val count = extractor.readSampleData(buffer, 0)
                     val pts = extractor.sampleTime
-                    if (count < 0 || pts >= endUs) {
+                    // End a window from decoded timestamps, not by injecting stream EOS.
+                    // Some vendor codecs stall when reused after an artificial early EOS.
+                    // Feeding a packet past the boundary also lets delayed output drain.
+                    if (count < 0) {
                         decoder.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         inputEnded = true
                     } else {
@@ -139,6 +145,8 @@ internal class AudioWindowDecoder(private val context: Context) {
                     try {
                         val buffer = decoder.getOutputBuffer(index)
                         if (buffer != null && info.size > 0) {
+                            // Bound stalls, not total decode time under CPU contention.
+                            deadline = SystemClock.elapsedRealtime() + 8000L
                             val encoding = if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
                                 outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
                             } else AudioFormat.ENCODING_PCM_16BIT

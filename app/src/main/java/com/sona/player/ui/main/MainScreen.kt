@@ -327,6 +327,7 @@ fun MainScreen(
                     onUpdateHarmonicMixingStrict = { viewModel.updateHarmonicMixingStrict(it) },
                     onUpdateAvoidVocalClash = { viewModel.updateAvoidVocalClash(it) },
                     onUpdateEnergyMatching = { viewModel.updateEnergyMatching(it) },
+                    onUpdateAutoAnalyzeOnChargingIdle = { viewModel.updateAutoAnalyzeOnChargingIdle(it) },
                     onToggleFolderBlacklist = { path, blacklisted -> viewModel.toggleFolderBlacklist(path, blacklisted) },
                     onUpdateArtistSeparators = { viewModel.updateArtistSeparators(it) },
                     onUpdateGaplessPlayback = { viewModel.updateGaplessPlayback(it) },
@@ -335,6 +336,7 @@ fun MainScreen(
                     onUpdateThemeMode = { viewModel.updateThemeMode(it) },
                     onUpdateUseDynamicMonet = { viewModel.updateUseDynamicMonet(it) },
                     onUpdateUseArtworkPalette = { viewModel.updateUseArtworkPalette(it) },
+                    onUpdateShowPlayerDiagnostics = { viewModel.updateShowPlayerDiagnostics(it) },
                     onUpdateExpressiveAnimations = { viewModel.updateExpressiveAnimations(it) },
                     onResetSettings = { viewModel.resetSettings() },
                     onStartAnalysis = { force -> viewModel.startLibraryAnalysis(force) },
@@ -358,7 +360,7 @@ fun MainScreen(
                         onPlaySong = { viewModel.playSong(it) },
                         onPlayAll = { songs, shuffle -> viewModel.playAll(songs, shuffle) },
                         onTogglePlayPause = { viewModel.togglePlayPause() },
-                        onToggleAutomix = { viewModel.toggleAutomix() },
+                        onQuickAutomix = { viewModel.playQuickAutomix() },
                         onOpenTrackOptions = { viewModel.openTrackOptions(it) },
                         onOpenAlbum = { album ->
                             viewModel.openAlbumDetail(album)
@@ -544,6 +546,7 @@ fun MainScreen(
     trackDetails?.let { details ->
         val automix = playerState.automix.analyzedTracks[details.songId]
             ?: playerState.automix.currentAnalysis?.takeIf { it.songId == details.songId }
+            ?: viewModel.getCachedAnalysis(details.songId)
         TrackDetailsDialog(
             details = details,
             automixAnalysis = automix,
@@ -602,6 +605,7 @@ fun MainScreen(
             currentIndex = playerState.currentIndex,
             automixState = playerState.automix,
             smartQueueUpdatedAtMs = playerState.smartQueueUpdatedAtMs,
+            showDiagnostics = settings.showPlayerDiagnostics,
             isFavorite = currentSong != null && favorites.contains(currentSong.id),
             onToggleFavorite = { currentSong?.let { viewModel.toggleFavorite(it.id) } },
             onMoreClick = { currentSong?.let { viewModel.openTrackOptions(it) } },

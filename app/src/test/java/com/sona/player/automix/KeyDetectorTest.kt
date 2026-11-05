@@ -64,4 +64,35 @@ class KeyDetectorTest {
         assertNotNull(key)
         assertEquals(8, key!!.camelotNumber)
     }
+
+    @Test
+    fun detectsEMajorPopProgressionWithoutMediantMinorBias() {
+        // E - G#m - C#m - A (e.g. Adela - "Ain't In LA").
+        // Previously misclassified by raw Krumhansl as 1A (G# minor) due to mediant-minor bias.
+        val rate = 16_000
+        val chordSeconds = 3
+        val chords = listOf(
+            intArrayOf(64, 68, 71), // E major: E4, G#4, B4
+            intArrayOf(68, 71, 75), // G# minor: G#4, B4, D#5
+            intArrayOf(61, 64, 68), // C# minor: C#4, E4, G#4
+            intArrayOf(57, 61, 64)  // A major: A3, C#4, E4
+        )
+        val samples = FloatArray(chords.size * chordSeconds * rate)
+        for ((idx, chord) in chords.withIndex()) {
+            val startSample = idx * chordSeconds * rate
+            val endSample = (idx + 1) * chordSeconds * rate
+            for (note in chord) {
+                val freq = 440.0 * 2.0.pow((note - 69) / 12.0)
+                for (i in startSample until endSample) {
+                    val t = (i - startSample).toDouble()
+                    samples[i] += (0.1 * sin(2 * PI * freq * t / rate)).toFloat()
+                }
+            }
+        }
+        val chroma = DoubleArray(12)
+        val frames = KeyDetector.accumulate(AudioWindow(0L, samples, rate), chroma)
+        val key = KeyDetector.estimate(chroma, frames)
+        assertNotNull(key)
+        assertEquals("12B", key!!.camelotLabel) // 12B = E major
+    }
 }

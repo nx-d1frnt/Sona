@@ -15,7 +15,9 @@ android {
         versionCode = 1
         versionName = "1.0.0"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (providers.gradleProperty("vocalDiagnostics").orNull == "true") {
+            "com.sona.player.automix.VocalDetectorDiagnostics"
+        } else "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {

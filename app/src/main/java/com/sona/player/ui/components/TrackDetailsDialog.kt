@@ -175,6 +175,9 @@ fun TrackDetailsDialog(
                         ?: stringResource(R.string.details_key_determining)
                     DetailRow(label = stringResource(R.string.details_key), value = keyString)
                     DetailRow(label = stringResource(R.string.details_energy), value = "${(automixAnalysis.energy * 100).roundToInt()}%")
+                    val vocalString = automixAnalysis.vocalPercentage?.let { "$it%" }
+                        ?: stringResource(R.string.details_key_determining)
+                    DetailRow(label = stringResource(R.string.details_vocal_percentage), value = vocalString)
                 }
 
                 HorizontalDivider(color = DividerDefaults.color.copy(alpha = 0.3f))

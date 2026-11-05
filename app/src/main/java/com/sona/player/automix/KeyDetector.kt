@@ -38,8 +38,14 @@ data class MusicalKey(val tonic: Int, val minor: Boolean, val confidence: Float)
 }
 
 /**
- * Krumhansl-Schmuckler key estimation from a pitch-class profile (chroma) accumulated over
- * the analysis windows. Pitch-preserving tempo sync does not change key, so this is stable.
+ * Key estimation using Temperley profiles adapted for modern popular music with spectral
+ * peak extraction and tuning compensation.
+ *
+ * Classical Krumhansl-Schmuckler profiles have an inherent mathematical bias towards minor keys
+ * and frequently misclassify popular music chord progressions (such as I-iii-vi-IV) as the mediant
+ * minor key (e.g. E Major misclassified as G# Minor). Temperley profiles equalize major/minor mean
+ * weights and balance natural-minor scale degrees. Peak picking ensures only sinusoidal partials
+ * contribute to chroma, eliminating broadband noise and skirt smear.
  */
 internal object KeyDetector {
     private const val FFT_SIZE = 4096 // ~3.9 Hz bins at 16 kHz
@@ -47,8 +53,8 @@ internal object KeyDetector {
     private const val MIN_HZ = 130.81 // C3: below this, 3.9 Hz bins approach or exceed a semitone (~7.3 Hz)
     private const val MAX_HZ = 2_100.0
 
-    private val MAJOR = doubleArrayOf(6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88)
-    private val MINOR = doubleArrayOf(6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17)
+    private val MAJOR = doubleArrayOf(5.0, 2.0, 3.5, 2.0, 4.5, 4.0, 2.0, 4.5, 2.0, 3.5, 1.5, 4.0)
+    private val MINOR = doubleArrayOf(5.0, 2.0, 3.5, 4.5, 2.0, 4.0, 2.0, 4.5, 3.5, 2.0, 4.0, 1.5)
 
     private val hann = DoubleArray(FFT_SIZE) { 0.5 - 0.5 * cos(2 * PI * it / (FFT_SIZE - 1)) }
 
@@ -87,13 +93,13 @@ internal object KeyDetector {
             for (bin in firstBin..lastBin) {
                 val mag = magnitudes[bin]
                 if (mag <= 1e-6) continue
-                // Parabolic peak interpolation refines sub-bin frequency and enables tuning estimation
                 val prev = magnitudes[bin - 1]
                 val next = magnitudes[bin + 1]
-                val delta = if (mag >= prev && mag >= next) {
-                    val denom = prev - 2.0 * mag + next
-                    if (abs(denom) > 1e-9) (0.5 * (prev - next) / denom).coerceIn(-0.5, 0.5) else 0.0
-                } else 0.0
+                // Only retain spectral peaks (local maxima) to reject broadband noise and side lobes
+                if (mag < prev || mag < next) continue
+                // Parabolic peak interpolation refines sub-bin frequency and enables tuning estimation
+                val denom = prev - 2.0 * mag + next
+                val delta = if (abs(denom) > 1e-9) (0.5 * (prev - next) / denom).coerceIn(-0.5, 0.5) else 0.0
                 val freq = (bin + delta) * binHz
                 midiList[count] = 69.0 + 12.0 * ln(freq / 440.0) / ln(2.0)
                 weightList[count] = mag

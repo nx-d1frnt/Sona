@@ -86,7 +86,7 @@ fun HomeScreen(
     onPlaySong: (Song) -> Unit,
     onPlayAll: (List<Song>, Boolean) -> Unit,
     onTogglePlayPause: () -> Unit,
-    onToggleAutomix: () -> Unit,
+    onQuickAutomix: () -> Unit,
     onOpenTrackOptions: (Song) -> Unit,
     onOpenAlbum: (Album) -> Unit,
     onOpenArtist: (Artist) -> Unit,
@@ -147,25 +147,36 @@ fun HomeScreen(
                 .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Automix Toggle FilterChip
-            FilterChip(
-                selected = isAutomixEnabled,
-                onClick = onToggleAutomix,
-                label = {
-                    Text(
-                        text = stringResource(R.string.home_quick_mix),
-                        fontWeight = FontWeight.SemiBold
-                    )
-                },
-                leadingIcon = {
-                    Icon(
-                        imageVector = Icons.Rounded.AutoAwesome,
-                        contentDescription = null,
-                        modifier = Modifier.size(FilterChipDefaults.IconSize)
-                    )
-                },
-                shape = RoundedCornerShape(16.dp)
-            )
+            // Quick Automix Action AssistChip
+            if (allSongs.isNotEmpty()) {
+                val isAutomixActive = isPlaying && isAutomixEnabled
+                AssistChip(
+                    onClick = onQuickAutomix,
+                    label = {
+                        Text(
+                            text = stringResource(R.string.home_quick_mix),
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            tint = if (isAutomixActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(AssistChipDefaults.IconSize)
+                        )
+                    },
+                    colors = if (isAutomixActive) {
+                        AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    } else {
+                        AssistChipDefaults.assistChipColors()
+                    },
+                    shape = RoundedCornerShape(16.dp)
+                )
+            }
 
             // Shuffle All AssistChip
             if (allSongs.isNotEmpty()) {

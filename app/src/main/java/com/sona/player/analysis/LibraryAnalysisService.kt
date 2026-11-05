@@ -10,20 +10,17 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.sona.player.MainActivity
-import com.sona.player.data.repository.AudioRepository
 import com.sona.player.playback.AutomixPlaybackEngine
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import java.util.concurrent.atomic.AtomicInteger
 
 data class LibraryAnalysisState(
     val running: Boolean = false, val total: Int = 0, val completed: Int = 0,
     val cached: Int = 0, val failed: Int = 0, val title: String = "",
     val waitingForPlayback: Boolean = false, val cancelled: Boolean = false,
-    val message: String = ""
+    val message: String = "", val etaMillis: Long? = null
 )
 
 /** User-started local media processing. Owns its work independently of Activity/ViewModel. */
@@ -34,7 +31,15 @@ class LibraryAnalysisService : Service() {
         private const val STOP = "com.sona.player.STOP_ANALYSIS"
         private val mutableState = MutableStateFlow(LibraryAnalysisState())
         val state = mutableState.asStateFlow()
+
+        val isRunning: Boolean get() = mutableState.value.running
+
+        fun updateState(transform: (LibraryAnalysisState) -> LibraryAnalysisState) {
+            mutableState.update(transform)
+        }
+
         fun start(context: Context, force: Boolean) {
+            AutoAnalysisJobService.cancelActiveJob()
             try {
                 ContextCompat.startForegroundService(context, Intent(context, LibraryAnalysisService::class.java)
                     .putExtra("force", force))
@@ -44,6 +49,7 @@ class LibraryAnalysisService : Service() {
         }
         fun cancel(context: Context) {
             context.startService(Intent(context, LibraryAnalysisService::class.java).setAction(STOP))
+            AutoAnalysisJobService.cancelActiveJob()
         }
     }
 
@@ -88,77 +94,15 @@ class LibraryAnalysisService : Service() {
         mutableState.value = LibraryAnalysisState(running = true)
         work = scope.launch {
             try {
-                val engine = AutomixPlaybackEngine.getInstance(applicationContext)
-                val songs = AudioRepository(applicationContext).getSongs()
-                val totalCount = songs.size
-                val initialCached = if (force) 0 else songs.count { !engine.needsLibraryAnalysis(it.id) }
-                val completedCount = AtomicInteger(initialCached)
-                val cachedCount = AtomicInteger(initialCached)
-                val failedCount = AtomicInteger(0)
-
-                mutableState.value = mutableState.value.copy(
-                    total = totalCount,
-                    completed = initialCached,
-                    cached = initialCached
+                val runner = LibraryAnalysisRunner(
+                    context = applicationContext,
+                    force = force,
+                    onProgress = { state -> mutableState.value = state },
+                    onPublishNotification = { publish() },
+                    onAcquireWakeLock = { acquireWakeLock() },
+                    onReleaseWakeLock = { releaseWakeLock() }
                 )
-                publish(true)
-
-                val pendingSongs = if (force) songs else songs.filter { engine.needsLibraryAnalysis(it.id) }
-                if (pendingSongs.isEmpty()) {
-                    engine.notifyLibraryAnalysisProgress(forceImmediate = true)
-                    finish()
-                    return@launch
-                }
-
-                val workerCount = minOf(4, maxOf(2, Runtime.getRuntime().availableProcessors() - 1))
-                val channel = Channel<com.sona.player.data.model.Song>(Channel.BUFFERED)
-
-                val producer = launch(Dispatchers.Default) {
-                    for (song in pendingSongs) {
-                        channel.send(song)
-                    }
-                    channel.close()
-                }
-
-                val workers = (0 until workerCount).map {
-                    launch(Dispatchers.Default) {
-                        for (song in channel) {
-                            ensureActive()
-                            while (engine.playerState.value.isPlaying || engine.playerState.value.automix.isTransitioning) {
-                                releaseWakeLock()
-                                mutableState.update { it.copy(waitingForPlayback = true) }
-                                publish()
-                                delay(1000)
-                            }
-                            mutableState.update { it.copy(waitingForPlayback = false, title = song.title) }
-
-                            acquireWakeLock()
-                            publish()
-                            try {
-                                engine.analyzeLibrarySong(song, force)
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (_: Exception) {
-                                failedCount.incrementAndGet()
-                            }
-
-                            val currentCompleted = completedCount.incrementAndGet()
-                            mutableState.update {
-                                it.copy(
-                                    completed = currentCompleted,
-                                    cached = cachedCount.get(),
-                                    failed = failedCount.get()
-                                )
-                            }
-                            publish()
-                        }
-                    }
-                }
-
-                producer.join()
-                workers.joinAll()
-                engine.notifyLibraryAnalysisProgress(forceImmediate = true)
-                engine.flushPendingAnalysisWrites()
+                runner.execute()
                 finish()
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -179,13 +123,23 @@ class LibraryAnalysisService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val cancel = PendingIntent.getService(this, 1, Intent(this, LibraryAnalysisService::class.java).setAction(STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        return NotificationCompat.Builder(this, CHANNEL)
+
+        val etaText = if (state.running && state.etaMillis != null && state.etaMillis > 0L && !state.waitingForPlayback) {
+            getString(com.sona.player.R.string.analysis_eta, AnalysisEtaEstimator.formatEta(this, state.etaMillis))
+        } else null
+
+        val builder = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle(getString(com.sona.player.R.string.analysis_notification_title, state.completed, state.total))
             .setContentText(if (state.waitingForPlayback) getString(com.sona.player.R.string.analysis_waiting_for_playback) else state.title.ifEmpty { getString(com.sona.player.R.string.analysis_preparing) })
             .setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true).setSilent(true)
             .setProgress(state.total, state.completed, state.total == 0)
-            .addAction(0, getString(com.sona.player.R.string.analysis_stop), cancel).build()
+            .addAction(0, getString(com.sona.player.R.string.analysis_stop), cancel)
+
+        if (etaText != null) {
+            builder.setSubText(etaText)
+        }
+        return builder.build()
     }
 
     private fun publish(force: Boolean = false) {
@@ -201,7 +155,7 @@ class LibraryAnalysisService : Service() {
     private fun finish(cancelled: Boolean = false, message: String = "") {
         prefs.edit().putBoolean("running", false).remove("done").apply()
         mutableState.value = mutableState.value.copy(running = false, waitingForPlayback = false,
-            cancelled = cancelled, message = message)
+            cancelled = cancelled, message = message, etaMillis = null)
         work?.cancel()
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)

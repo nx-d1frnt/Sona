@@ -63,9 +63,9 @@ internal object BeatTracker {
         }
         if (peaks.size < 6) return null
 
-        // Refine the period from nearby measured inter-onset intervals; avoids integer-lag BPM drift.
-        val intervals = peaks.zipWithNext { a, b -> b - a }.filter { abs(it - periodMs) < periodMs * 0.12 }.sorted()
-        if (intervals.size >= 4) periodMs = intervals[intervals.size / 2]
+        // Keep the sub-frame autocorrelation estimate. Adjacent onset intervals are
+        // quantized to 10ms and include syncopation; their median can shift the grid
+        // by hundreds of milliseconds across a long analysis window.
         val tolerance = min(65.0, periodMs * 0.14)
         var bestBeats = emptyList<Double>()
         var bestQuality = 0.0
@@ -91,7 +91,7 @@ internal object BeatTracker {
         if (bestBeats.size < 6) return null
         val confidence = (bestQuality * min(1.0, correlation[bestLag] / 0.65)).toFloat().coerceIn(0f, 1f)
         val finalBeats = bestBeats.distinct()
-        val phase = detectDownbeatPhase(finalBeats, novelty)
+        val phase = detectDownbeatPhase(finalBeats, novelty, periodMs)
         return BeatSection(
             window.startMs,
             window.endMs,
@@ -102,15 +102,16 @@ internal object BeatTracker {
         )
     }
 
-    private fun detectDownbeatPhase(beats: List<Double>, novelty: FloatArray): Int {
+    private fun detectDownbeatPhase(beats: List<Double>, novelty: FloatArray, periodMs: Double): Int {
         if (beats.size < 4) return 0
         var bestPhase = 0
         var maxScore = -1.0
         for (phase in 0..3) {
             var sum = 0.0
             var count = 0
-            for (i in phase until beats.size step 4) {
-                val frame = (beats[i] / 10.0).roundToInt()
+            for (i in beats.indices) {
+                if (((beats[i] - beats.first()) / periodMs).roundToInt() % 4 != phase) continue
+                val frame = ((beats[i] - FFT_SIZE * 500.0 / 16_000) / 10.0).roundToInt()
                 var peak = 0f
                 for (f in (frame - 2).coerceAtLeast(0)..(frame + 2).coerceAtMost(novelty.lastIndex)) {
                     if (novelty[f] > peak) peak = novelty[f]

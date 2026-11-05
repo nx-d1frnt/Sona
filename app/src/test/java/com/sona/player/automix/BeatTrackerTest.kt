@@ -65,4 +65,12 @@ class BeatTrackerTest {
         val downbeatIntervals = section.downbeatsMs.zipWithNext { a, b -> b - a }
         assertTrue(downbeatIntervals.all { abs(it - 2000L) <= 100L })
     }
+    @Test fun missedOnsetDoesNotShiftLaterDownbeatsOrPhrases() {
+        val timestamps = (0..40).filter { it != 5 }.map { it * 500L }
+        val section = BeatSection(0, 21_000, 120f, 0.9f, timestamps)
+        assertEquals((0..40 step 4).map { it * 500L }, section.downbeatsMs)
+        assertEquals(listOf(0L, 8000L, 16000L), section.phraseBoundaries16Ms)
+        assertEquals(listOf(0L, 16000L), section.phraseBoundaries32Ms)
+    }
+
 }

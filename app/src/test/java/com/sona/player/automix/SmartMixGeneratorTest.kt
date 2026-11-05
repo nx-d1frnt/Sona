@@ -105,6 +105,24 @@ class SmartMixGeneratorTest {
     }
 
     @Test
+    fun instrumentalFilteringUsesMeasuredCoverageAndExcludesUnknownVocals() {
+        val songs = listOf(
+            mockSong(1L, "Vocal Hit", "Singer"),
+            mockSong(2L, "Quiet Track", "Producer"),
+            mockSong(3L, "Unclassified Track", "Artist")
+        )
+        val analyses = mapOf(
+            1L to mockAnalysis(1L, 120f, 0.6f,
+                vocalSections = listOf(VocalSection(0, 10_000, 0.65f))),
+            2L to mockAnalysis(2L, 120f, 0.6f,
+                vocalSections = listOf(VocalSection(0, 10_000, 0.05f))),
+            3L to mockAnalysis(3L, 120f, 0.6f)
+        )
+        val filtered = SmartMixGenerator.filterTracksForVibe(AutomixVibe.INSTRUMENTAL, songs) { analyses[it] }
+        assertEquals(listOf(2L), filtered.map { it.first.id })
+    }
+
+    @Test
     fun testHarmonicChainingPrefersCompatibleKeysAndBpm() {
         val s1 = mockSong(1L, "Track 1", "Artist 1") // 124 BPM, C Major (0)
         val s2 = mockSong(2L, "Clashing Track", "Artist 2") // 160 BPM, F# Major (6)

@@ -100,6 +100,7 @@
     <string name="details_bpm">Темп (BPM)</string>
     <string name="details_key">Тональность</string>
     <string name="details_energy">Энергия трека</string>
+    <string name="details_vocal_percentage">Процент вокала</string>
     <string name="details_key_determining">Определяется</string>
     <string name="details_file_path">Путь к файлу</string>
     <string name="details_path_copied_toast">Путь скопирован</string>
@@ -190,6 +191,13 @@
     <string name="analysis_cancelled">Анализ остановлен</string>
     <string name="analysis_completed">Анализ завершён</string>
     <string name="analysis_progress_count">%1$d из %2$d</string>
+    <string name="analysis_eta">~%s осталось</string>
+    <string name="analysis_eta_less_than_minute">&lt; 1 мин</string>
+    <string name="analysis_eta_minutes">%d мин</string>
+    <string name="analysis_eta_hours">%d ч</string>
+    <string name="analysis_eta_hours_minutes">%1$d ч %2$d мин</string>
+    <string name="settings_auto_analysis_charging_idle_title">Анализ при зарядке и простое</string>
+    <string name="settings_auto_analysis_charging_idle_desc">Автоматически анализировать новые треки в фоне, когда устройство подключено к зарядке и экран выключен</string>
     <string name="analysis_stop">Остановить</string>
     <string name="analysis_recalculate_all">Пересчитать всю библиотеку</string>
     <string name="analysis_start">Анализировать библиотеку</string>
@@ -212,4 +220,12 @@
     <string name="sona_live_repeating">На повторе: %1$s</string>
     <string name="sona_live_up_next">Далее: %1$s</string>
     <string name="sona_live_queue_end">Последний трек в очереди</string>
+
+    <string name="settings_player_diagnostics_title">Диагностика плеера</string>
+    <string name="settings_player_diagnostics_desc">Показывать состояние воспроизведения, оценки вокала, точки переходов и данные анализа в плеере.</string>
+    <string name="player_diagnostics_title">Диагностика трека</string>
+    <string name="player_diagnostics_copy">Копировать отчёт</string>
+    <string name="player_diagnostics_no_analysis">Сохранённый анализ отсутствует</string>
+    <string name="player_diagnostics_loading_format">Загрузка аудиоформата…</string>
+    <string name="player_diagnostics_format_unavailable">Аудиоформат недоступен</string>
 </resources>

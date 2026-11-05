@@ -53,6 +53,7 @@ fun SettingsScreen(
     onUpdateHarmonicMixingStrict: (Boolean) -> Unit,
     onUpdateAvoidVocalClash: (Boolean) -> Unit,
     onUpdateEnergyMatching: (Boolean) -> Unit,
+    onUpdateAutoAnalyzeOnChargingIdle: (Boolean) -> Unit,
     onToggleFolderBlacklist: (String, Boolean) -> Unit,
     onUpdateArtistSeparators: (List<String>) -> Unit,
     onUpdateGaplessPlayback: (Boolean) -> Unit,
@@ -61,6 +62,7 @@ fun SettingsScreen(
     onUpdateThemeMode: (ThemeMode) -> Unit,
     onUpdateUseDynamicMonet: (Boolean) -> Unit,
     onUpdateUseArtworkPalette: (Boolean) -> Unit,
+    onUpdateShowPlayerDiagnostics: (Boolean) -> Unit,
     onUpdateExpressiveAnimations: (Boolean) -> Unit,
     onResetSettings: () -> Unit,
     onStartAnalysis: (Boolean) -> Unit,
@@ -175,6 +177,7 @@ fun SettingsScreen(
                                 onUpdateHarmonicMixingStrict = onUpdateHarmonicMixingStrict,
                                 onUpdateAvoidVocalClash = onUpdateAvoidVocalClash,
                                 onUpdateEnergyMatching = onUpdateEnergyMatching,
+                                onUpdateAutoAnalyzeOnChargingIdle = onUpdateAutoAnalyzeOnChargingIdle,
                                 onStartAnalysis = onStartAnalysis,
                                 onCancelAnalysis = onCancelAnalysis,
                                 context = context,
@@ -203,6 +206,7 @@ fun SettingsScreen(
                                 onUpdateThemeMode = onUpdateThemeMode,
                                 onUpdateUseDynamicMonet = onUpdateUseDynamicMonet,
                                 onUpdateUseArtworkPalette = onUpdateUseArtworkPalette,
+                                onUpdateShowPlayerDiagnostics = onUpdateShowPlayerDiagnostics,
                                 onUpdateExpressiveAnimations = onUpdateExpressiveAnimations
                             )
                         }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.Animation
 import androidx.compose.material.icons.rounded.ColorLens
 import androidx.compose.material.icons.rounded.DarkMode
@@ -43,6 +44,7 @@ fun AppearanceSettingsSubPage(
     onUpdateThemeMode: (ThemeMode) -> Unit,
     onUpdateUseDynamicMonet: (Boolean) -> Unit,
     onUpdateUseArtworkPalette: (Boolean) -> Unit,
+    onUpdateShowPlayerDiagnostics: (Boolean) -> Unit,
     onUpdateExpressiveAnimations: (Boolean) -> Unit
 ) {
     val modes = listOf(
@@ -147,6 +149,18 @@ fun AppearanceSettingsSubPage(
                 checked = settings.expressiveAnimations,
                 onCheckedChange = onUpdateExpressiveAnimations,
                 position = ConnectedPosition.Bottom
+            )
+
+        }
+
+        ExpressiveSettingsGroup(title = stringResource(R.string.now_playing_title)) {
+            ExpressiveSwitchItem(
+                title = stringResource(R.string.settings_player_diagnostics_title),
+                subtitle = stringResource(R.string.settings_player_diagnostics_desc),
+                icon = Icons.Rounded.BugReport,
+                checked = settings.showPlayerDiagnostics,
+                onCheckedChange = onUpdateShowPlayerDiagnostics,
+                position = ConnectedPosition.Single
             )
         }
     }
